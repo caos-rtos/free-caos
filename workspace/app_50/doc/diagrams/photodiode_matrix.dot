@@ -1,0 +1,103 @@
+/* Matrice 5x5 dei fotodiodi del VD6283TX (DS13735 §8.1, Figura 17, p.41).
+ *
+ * Ridisegnata perche' nel datasheet i due fotodiodi DARK sono stampati NERI SU
+ * FONDO NERO: la legenda li elenca, i quadrati appaiono vuoti. Qui sono
+ * marcati esplicitamente, che e' l'informazione che serve per capire come si
+ * raggiunge il canale dark (SEL_PD 0x18). */
+digraph photodiode_matrix {
+    rankdir = TB;
+    bgcolor = "transparent";
+    node  [shape=none, margin=0];
+    graph [fontname="Helvetica", fontsize=11];
+
+    matrix [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="9">
+        <TR>
+          <TD BORDER="0"></TD>
+          <TD BORDER="0"><FONT POINT-SIZE="9">col 1</FONT></TD>
+          <TD BORDER="0"><FONT POINT-SIZE="9">col 2</FONT></TD>
+          <TD BORDER="0"><FONT POINT-SIZE="9">col 3</FONT></TD>
+          <TD BORDER="0"><FONT POINT-SIZE="9">col 4</FONT></TD>
+          <TD BORDER="0"><FONT POINT-SIZE="9">col 5</FONT></TD>
+        </TR>
+        <TR>
+          <TD BORDER="0"><FONT POINT-SIZE="9">riga 1</FONT></TD>
+          <TD BGCOLOR="white">C</TD>
+          <TD BGCOLOR="#c8d2dc">VIS</TD>
+          <TD BGCOLOR="#e03030"><FONT COLOR="white">R</FONT></TD>
+          <TD BGCOLOR="#20a020"><FONT COLOR="white">G</FONT></TD>
+          <TD BGCOLOR="#101010"><FONT COLOR="#ffd040"><B>D</B></FONT></TD>
+        </TR>
+        <TR>
+          <TD BORDER="0"><FONT POINT-SIZE="9">riga 2</FONT></TD>
+          <TD BGCOLOR="#c88060">IR</TD>
+          <TD BGCOLOR="white">C</TD>
+          <TD BGCOLOR="#2030d0"><FONT COLOR="white">B</FONT></TD>
+          <TD BGCOLOR="#e03030"><FONT COLOR="white">R</FONT></TD>
+          <TD BGCOLOR="#20a020"><FONT COLOR="white">G</FONT></TD>
+        </TR>
+        <TR>
+          <TD BORDER="0"><FONT POINT-SIZE="9">riga 3</FONT></TD>
+          <TD BGCOLOR="#20a020"><FONT COLOR="white">G</FONT></TD>
+          <TD BGCOLOR="#c88060">IR</TD>
+          <TD BGCOLOR="white">C</TD>
+          <TD BGCOLOR="#c8d2dc">VIS</TD>
+          <TD BGCOLOR="#2030d0"><FONT COLOR="white">B</FONT></TD>
+        </TR>
+        <TR>
+          <TD BORDER="0"><FONT POINT-SIZE="9">riga 4</FONT></TD>
+          <TD BGCOLOR="#e03030"><FONT COLOR="white">R</FONT></TD>
+          <TD BGCOLOR="#20a020"><FONT COLOR="white">G</FONT></TD>
+          <TD BGCOLOR="#c88060">IR</TD>
+          <TD BGCOLOR="white">C</TD>
+          <TD BGCOLOR="#c8d2dc">VIS</TD>
+        </TR>
+        <TR>
+          <TD BORDER="0"><FONT POINT-SIZE="9">riga 5</FONT></TD>
+          <TD BGCOLOR="#101010"><FONT COLOR="#ffd040"><B>D</B></FONT></TD>
+          <TD BGCOLOR="#2030d0"><FONT COLOR="white">B</FONT></TD>
+          <TD BGCOLOR="#20a020"><FONT COLOR="white">G</FONT></TD>
+          <TD BGCOLOR="#c88060">IR</TD>
+          <TD BGCOLOR="white">C</TD>
+        </TR>
+      </TABLE>
+    >];
+
+    legend [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5">
+        <TR><TD BORDER="0" COLSPAN="3"><B>25 fotodiodi</B></TD></TR>
+        <TR>
+          <TD BGCOLOR="white">C</TD>
+          <TD ALIGN="LEFT">clear, nessun filtro</TD>
+          <TD>5</TD>
+        </TR>
+        <TR>
+          <TD BGCOLOR="#20a020"><FONT COLOR="white">G</FONT></TD>
+          <TD ALIGN="LEFT">verde</TD><TD>5</TD>
+        </TR>
+        <TR>
+          <TD BGCOLOR="#c88060">IR</TD>
+          <TD ALIGN="LEFT">infrarosso</TD><TD>4</TD>
+        </TR>
+        <TR>
+          <TD BGCOLOR="#c8d2dc">VIS</TD>
+          <TD ALIGN="LEFT">visibile, filtrato IR</TD><TD>3</TD>
+        </TR>
+        <TR>
+          <TD BGCOLOR="#e03030"><FONT COLOR="white">R</FONT></TD>
+          <TD ALIGN="LEFT">rosso</TD><TD>3</TD>
+        </TR>
+        <TR>
+          <TD BGCOLOR="#2030d0"><FONT COLOR="white">B</FONT></TD>
+          <TD ALIGN="LEFT">blu</TD><TD>3</TD>
+        </TR>
+        <TR>
+          <TD BGCOLOR="#101010"><FONT COLOR="#ffd040"><B>D</B></FONT></TD>
+          <TD ALIGN="LEFT"><B>dark, coperti</B></TD><TD>2</TD>
+        </TR>
+      </TABLE>
+    >];
+
+    { rank = same; matrix; legend; }
+    matrix -> legend [style=invis];
+}

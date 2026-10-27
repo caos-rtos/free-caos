@@ -1,0 +1,34 @@
+/* Il percorso del segnale del canale 2, e perche' VIS e DARK non sono
+ * leggibili insieme: SEL_PD(1) sceglie QUALI fotodiodi alimentano il canale,
+ * e i due gruppi si escludono a vicenda. E' il vincolo attorno a cui e'
+ * costruita la ricostruzione di VIS da R+G+B. */
+digraph channel_path {
+    rankdir = LR;
+    bgcolor = "transparent";
+    graph [fontname="Helvetica", fontsize=10, nodesep=0.35, ranksep=0.55];
+    node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled"];
+    edge  [fontname="Helvetica", fontsize=9];
+
+    subgraph cluster_pd {
+        label = "fotodiodi della matrice";
+        style = "rounded";
+        color = "#909090";
+        fontsize = 10;
+
+        vis [label="3 diodi VIS\n(visibile, filtrato IR)", fillcolor="#c8d2dc"];
+        drk [label="2 diodi D\n(coperti)", fillcolor="#303030", fontcolor="#ffd040"];
+    }
+
+    sel  [label="SEL_PD(1)\nreg 0x6C", fillcolor="#ffe8a0", shape=box];
+    adc  [label="catena analogica\n+ clamp DC/AC\n+ ADC 24 bit", fillcolor="#e8e8e8"];
+    data [label="ALS_CH2_DATA\nreg 0x0A", fillcolor="#d0e8d0"];
+
+    vis -> sel [label="  0x07", color="#4060a0", penwidth=2];
+    drk -> sel [label="  0x18", color="#806000", penwidth=2, style=dashed];
+    sel -> adc;
+    adc -> data;
+
+    note [shape=note, style=filled, fillcolor="#fff8e0", fontsize=9,
+          label="Un solo gruppo alla volta:\nil canale 2 legge VIS oppure DARK,\nmai entrambi nello stesso frame."];
+    data -> note [style=invis];
+}

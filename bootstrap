@@ -1,0 +1,14 @@
+#!/bin/bash
+# caOS FREE - configure the build for the MCU in cpu.cmake (or: ./bootstrap -m H753)
+cd "$(dirname "$0")" || exit 1
+if [ "${1:-}" = "-m" ] && [ -n "${2:-}" ]; then
+    sed -i "s/^set(CURR_MCU \"[A-Z0-9]*\"/set(CURR_MCU \"${2^^}\"/" cpu.cmake
+fi
+for t in arm-none-eabi-gcc cmake make; do
+    command -v "$t" >/dev/null || { echo "ERROR: '$t' not found in PATH (arm-none-eabi-gcc: Arm GNU Toolchain)"; exit 1; }
+done
+MCU=$(grep -oP 'set\(CURR_MCU\s+"\K[^"]+' cpu.cmake)
+echo "caOS FREE: configure for $MCU ($(arm-none-eabi-gcc -dumpversion))"
+rm -rf build
+cmake -S . -B build -G "Unix Makefiles" -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi.cmake \
+      -DCMAKE_BUILD_TYPE=Release -DCURR_MCU="$MCU"

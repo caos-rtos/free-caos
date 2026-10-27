@@ -1,0 +1,43 @@
+/* I tre task e chi possiede cosa.
+ *
+ * Il punto che il diagramma deve rendere: i due task di misura sono gli UNICI
+ * a scrivere sui rispettivi bus. La CLI non li tocca mai mentre girano - posa
+ * una richiesta, che il task raccoglie al confine di un frame. E' il motivo
+ * per cui "lux setup" pretende che entrambi i sensori siano fermi. */
+digraph task_flow {
+    rankdir = LR;
+    bgcolor = "transparent";
+    graph [fontname="Helvetica", fontsize=10, nodesep=0.4, ranksep=0.7];
+    node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled"];
+    edge  [fontname="Helvetica", fontsize=9];
+
+    subgraph cluster_hw {
+        label = "hardware";
+        style = "rounded"; color = "#909090"; fontsize = 10;
+        sa [label="VD6283TX  A", fillcolor="#d8e4f0"];
+        sb [label="VD6283TX  B", fillcolor="#d8e4f0"];
+    }
+
+    ta [label="task lux_a\nLEVEL3", fillcolor="#c8e0c8"];
+    tb [label="task lux_b\nLEVEL3", fillcolor="#c8e0c8"];
+    q  [label="coda\n8 elementi", fillcolor="#ffe8a0", shape=box3d];
+    tp [label="task lux_pr\nLEVEL4", fillcolor="#c8e0c8"];
+    out [label="console\n(righe tabellari)", fillcolor="#e8e8e8"];
+    cli [label="CLI\n(thread separato)", fillcolor="#f0d8d8"];
+
+    sa -> ta [dir=both, label=" I2C bus A", color="#4060a0", penwidth=2];
+    sb -> tb [dir=both, label=" I2C bus B", color="#4060a0", penwidth=2];
+
+    ta -> q [label=" trysend\n non blocca"];
+    tb -> q [label=" trysend"];
+    q  -> tp;
+    tp -> out;
+
+    cli -> ta [label=" richieste\n (flag)", style=dashed, color="#a04040"];
+    cli -> tb [style=dashed, color="#a04040"];
+    cli -> out [style=dashed, color="#a04040"];
+
+    note [shape=note, style=filled, fillcolor="#fff8e0", fontsize=9,
+          label="Il task POSSIEDE il suo bus.\nLa CLI non scrive mai sul sensore\ndi un task in marcia: posa un flag,\nil task lo applica a fine frame."];
+    cli -> note [style=invis];
+}

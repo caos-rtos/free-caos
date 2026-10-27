@@ -1,0 +1,40 @@
+% Preambolo LaTeX aggiuntivo per app_50_user_guide.
+%
+% Serve a una cosa sola: stampare l'appendice con il log di sessione in
+% ORIZZONTALE. Le righe della tabella sono larghe 118 caratteri, e su A4
+% verticale (160 mm utili) starebbero solo a 6pt - illeggibili. In orizzontale
+% ci sono 257 mm, quindi 9pt bastano con margine.
+%
+% pdflscape ruota anche la PAGINA nel PDF, non solo il contenuto: chi legge a
+% schermo la trova già nel verso giusto senza doverla girare a mano.
+
+\usepackage{pdflscape}
+\usepackage{fancyvrb}
+
+% ⚠️ pdflscape RUOTA la pagina nel PDF, ma NON allarga l'area di testo: quella
+% resta larga quanto la imposta geometry per il corpo del documento (160 mm).
+% Senza newgeometry la tabella continua a uscire dal foglio, semplicemente su
+% una pagina girata - il che è peggio, perché sembra a posto.
+
+% Il log è incluso da un file esterno (logs/…): così esiste in UN posto solo e
+% non può divergere dalla copia nel PDF. VerbatimInput lo prende alla lettera -
+% nessuna interpretazione di markup, che su un log è esattamente ciò che serve.
+\newcommand{\sessionlog}[1]{%
+  \clearpage
+  % ⚠️ newgeometry PRIMA di \begin{landscape}, e con l'opzione "landscape":
+  % dentro l'ambiente arriva troppo tardi e l'area di testo resta larga quanto
+  % nel corpo del documento. Il risultato e' una pagina girata con il log
+  % stretto in una colonna al centro - a prima vista sembra funzionare.
+  % Su A4 girato ci sono 297 mm, 267 utili con margini da 15: a \footnotesize
+  % Courier sono ~160 caratteri, contro i 118 della riga piu' larga del log.
+  \newgeometry{top=15mm,bottom=15mm,left=15mm,right=15mm,landscape}
+  \begin{landscape}
+  \VerbatimInput[fontsize=\footnotesize,
+                 fontfamily=courier,
+                 numbers=none,
+                 frame=none,
+                 baselinestretch=0.9]{#1}
+  \end{landscape}
+  \restoregeometry
+  \clearpage
+}

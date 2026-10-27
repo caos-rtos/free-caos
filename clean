@@ -1,0 +1,3 @@
+#!/bin/bash
+# caOS FREE - remove the build and the firmware built
+cd "$(dirname "$0")" && rm -rf build elfs && echo "clean"
