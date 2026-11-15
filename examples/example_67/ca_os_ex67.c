@@ -81,6 +81,10 @@ const u8 ca_ssh_authorized_pub[ED25519_PUBLIC_SIZE] = {
 #define USB_NUM      0U    /* OTG_FS CN13 */
 #define SSH_TASK_STACK STACK_LARGE
 
+#elif MCU_ID == 439
+#define USB_NUM      0U    /* OTG_FS CN13 */
+#define SSH_TASK_STACK (STACK_XLARGE+STACK_MEDIUM)   /* F4xx: extra headroom */
+
 #else
 /* example not supported by hardware (no Ethernet PHY on this board) */
 #undef EN_ETH
@@ -96,7 +100,6 @@ static const ca_ipv4_t s_ip = { .v = { 192U, 168U, 10U, 67U } };
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .v = { 192U, 168U, 10U, 67U } },
     .mac  = { .v = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x67U } },
-    .arp  = { .renew_ms = 30000U, .cache_size = 0U },
     .udp  = { .bindings = {{0}}, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -121,6 +124,15 @@ static void on_link_change(bool up)
 
 static void eth_gpio_init(void)
 {
+#if MCU_ID == 773
+    /* NUCLEO-H7S3L8 (UM3276 7.13, DS14359 AF11): REF_CLK PB6, MDIO PA2,
+     * MDC PG6, CRS_DV PA7, RXD0/RXD1 PG4/PG5, TX_EN PG11, TXD0/TXD1 PG13/PG12 */
+    static const struct { u8 port; u8 pin; } pins[] = {
+        { CA_GPIO_PORT_B,  6U }, { CA_GPIO_PORT_A,  2U }, { CA_GPIO_PORT_G,  6U },
+        { CA_GPIO_PORT_A,  7U }, { CA_GPIO_PORT_G,  4U }, { CA_GPIO_PORT_G,  5U },
+        { CA_GPIO_PORT_G, 11U }, { CA_GPIO_PORT_G, 13U }, { CA_GPIO_PORT_G, 12U },
+    };
+#else
     static const struct { u8 port; u8 pin; } pins[] = {
         { CA_GPIO_PORT_A,  1U }, { CA_GPIO_PORT_A,  2U }, { CA_GPIO_PORT_A,  7U },
         { CA_GPIO_PORT_C,  1U }, { CA_GPIO_PORT_C,  4U }, { CA_GPIO_PORT_C,  5U },
@@ -132,6 +144,7 @@ static void eth_gpio_init(void)
         { CA_GPIO_PORT_B, 13U },
 #endif /* EN_SSH_SERVICE && EN_TCP_SERVICE && EN_NET && EN_ETH */
     };
+#endif
     for (u32 i = 0U; i < sizeof(pins)/sizeof(pins[0]); i++) {
         ca_gpio_configure(pins[i].port, pins[i].pin,
             CA_GPIO_MODE_AF, CA_GPIO_OTYPE_PP,
@@ -183,6 +196,9 @@ static u32 task_net(void *arg)
      * stayed invisible until the bench compared EN_CLI_ARP against the
      * help. Static IP, so it is passed in directly. */
     ca_arp_service_init(net_cfg.mac, s_ip);
+    /* and its task: without it ca_arp_resolve() never gets an answer, so
+     * the board could not reach a host that had not talked to it first */
+    ca_arp_service_start();
 
     /* NO PACKET TRACER HERE, DELIBERATELY.
      *

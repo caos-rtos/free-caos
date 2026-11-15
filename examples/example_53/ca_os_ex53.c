@@ -47,7 +47,7 @@
 #define USB_NUM      1U    /* OTG_FS CN14 without ULPI — change to 0 if ULPI is available */
 #define EP_BULK_MPS  64U   /* 64 for OTG_FS, 512 for OTG_HS ULPI */
 
-#elif MCU_ID == 407 || MCU_ID == 767
+#elif MCU_ID == 407 || MCU_ID == 439 || MCU_ID == 767
 #define USB_NUM      0U
 #define EP_BULK_MPS  64U
 
@@ -65,6 +65,10 @@
 #define USB_NUM      0U          /* USB_DRD_FS — single instance H563 */
 #define EP_BULK_MPS  64U
 
+#elif MCU_ID == 773
+#define USB_NUM      0U          /* OTG_HS, integrated HS PHY run at FS (Type-C CN2) */
+#define EP_BULK_MPS  64U
+
 #else
 /* example not supported by hardware */
 #define EX53_NO_RAM_FOR_DISK  1
@@ -76,7 +80,7 @@
 #if EN_USB && EN_USB_MSC
 
 #define BLK_SIZE   512U
-#if MCU_ID == 407
+#if MCU_ID == 407 || MCU_ID == 439
 #define BLK_COUNT  128U          /* F407: 128 * 512 = 64 KB — minimum for valid FAT12
                                   * (RAM 128K: ramdisk 64K + USB code ~26K + stack/BSS).
                                   * U5/H7 have much more RAM → 128K. */

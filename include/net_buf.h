@@ -78,6 +78,9 @@
 /* .flags bits */
 #define NET_BUF_F_IN_USE  (1U << 0)
 #define NET_BUF_F_TX      (1U << 1)
+#define NET_BUF_F_REASM   (1U << 3)   /* datagram rebuilt by ip_defrag: its L4
+                                         checksum was never seen whole by the
+                                         MAC, the IPv4 handler verifies it */
 #define NET_BUF_F_RAW     (1U << 2)   /* send as is: no checksum insertion by
                                          the MAC, no software fill
                                          (ca_net_send_raw) */
@@ -157,6 +160,11 @@ bool          ca_net_buf_ref(u16 idx);
 /* References beyond the first, summed over the pool: a buffer counted by two
  * owners appears this many extra times in their totals.  ISR-safe. */
 u16           ca_net_buf_shared_count(void);
+
+/* true if idx has more than one owner (ca_net_buf_ref): its bytes, headroom
+ * included, must not be written - e.g. a TCP segment kept for retransmission
+ * and handed to a driver at the same time.  ISR-safe. */
+bool          ca_net_buf_is_shared(u16 idx);
 
 /* Convert index --- pointer.  No bounds check --- caller must ensure idx is valid. */
 ca_net_buf_t *ca_net_buf_ptr(u16 idx);

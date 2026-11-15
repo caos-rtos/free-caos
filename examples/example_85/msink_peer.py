@@ -41,6 +41,7 @@ Dependencies:
 """
 
 import argparse
+import atexit
 import os
 import signal
 import socket
@@ -156,7 +157,6 @@ def start_dnsmasq(iface, pc_ip):
         f"dhcp-option=option:router,{pc_ip}\n"
         f"dhcp-option=option:dns-server,8.8.8.8\n"
         f"dhcp-option=option:netmask,{MASK}\n"
-        f"log-dhcp\n"
         f"no-resolv\n"
         f"no-hosts\n"
     )
@@ -188,6 +188,12 @@ def start_dnsmasq(iface, pc_ip):
 
     pid = open(DHCP_PID).read().strip()
     print(f"[*] dnsmasq started (pid {pid})")
+    # Stopped on EVERY exit: a dnsmasq that outlived its script once grew its
+    # log to 4.2 GB and filled the root disk (ex44, 28/10)
+    atexit.register(stop_dnsmasq)
+    for _s in (signal.SIGTERM, signal.SIGHUP):
+        if signal.getsignal(_s) == signal.SIG_DFL:
+            signal.signal(_s, lambda n, f: sys.exit(128 + n))
     print(f"[*] DHCP pool {DHCP_START} - {DHCP_END}")
     print(f"[*] DHCP log: tail -f {DHCP_LOG}")
 
@@ -202,7 +208,7 @@ def stop_dnsmasq():
             pass
     else:
         subprocess.run(["pkill", "-f", "dnsmasq-caos85"], stderr=subprocess.DEVNULL)
-    for p in [DHCP_PID, DHCP_CONF]:
+    for p in [DHCP_PID, DHCP_CONF, DHCP_LOG]:
         try:
             os.remove(p)
         except Exception:

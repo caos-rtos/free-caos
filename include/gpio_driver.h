@@ -36,6 +36,11 @@ typedef enum {
     CA_GPIO_PORT_I,
     CA_GPIO_PORT_J,
     CA_GPIO_PORT_K,
+    CA_GPIO_PORT_L,     /* L..P: H7Rx/7Sx has ports M, N, O, P (no I, J, K, L) */
+    CA_GPIO_PORT_M,
+    CA_GPIO_PORT_N,
+    CA_GPIO_PORT_O,
+    CA_GPIO_PORT_P,
 } ca_gpio_port_t;
 
 /**

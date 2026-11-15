@@ -64,6 +64,17 @@
 
 
 
+#elif MCU_ID == 773
+/* NUCLEO-H7S3L8 (MB1737, UM3276 7.6): B2 USER on PC13, active LOW, and NO
+ * external pull-up on the board (measured 01/11/2026: the pin follows the
+ * internal pull) -> internal pull-up, falling edge, pressed = 0. */
+#define BTN_PORT        CA_GPIO_PORT_C
+#define BTN_PIN         13U
+#define BTN_TXT         "PC13"
+#define BTN_PULL        CA_GPIO_PULLUP
+#define BTN_EDGE        CA_EXTI_EDGE_FALLING
+#define BTN_PRESSED_LVL 0U
+
 #else
 /* NUCLEO-H753ZI (MB1364, UM2407 6.5): B1 USER PC13 */
 #define BTN_PORT        CA_GPIO_PORT_C
@@ -72,6 +83,13 @@
 
 
 
+#endif
+
+/* The boards above with a button wired to VDD and a pull-down on the board */
+#ifndef BTN_PULL
+#define BTN_PULL        CA_GPIO_NOPULL
+#define BTN_EDGE        CA_EXTI_EDGE_RISING
+#define BTN_PRESSED_LVL 1U
 #endif
 
 /* ============================================================================
@@ -285,7 +303,10 @@ static bool user_cli_handler(c_str *pcmd)
     }
     if (ca_strncmp(p, "btn", 3) == 0) {
         u32 v = ca_gpio_read(BTN_PORT, BTN_PIN);
-        CLI_PRINTF_N("EX30: " BTN_TXT "=%u (%s)", v, v ? "HIGH(pressed)" : "LOW(released)");
+        const bool pressed = (v == BTN_PRESSED_LVL);
+        CLI_PRINTF_N("EX30: " BTN_TXT "=%u (%s)", v,
+                     v ? (pressed ? "HIGH(pressed)" : "HIGH(released)")
+                       : (pressed ? "LOW(pressed)"  : "LOW(released)"));
         return true;
     }
     return false;
@@ -307,15 +328,15 @@ static u32 task_poll_btn(void *arg)
      * stay together. LEDs come from objmap.h through the driver. */
     ca_led_init();
 
-    /* B1: input, no internal pull - the board provides the network.
-     * On the U575 the button pin must NEVER be driven as OUTPUT/LOW: UM2861
-     * warns it shorts the button network. Input is what we want anyway. */
+    /* B1: input, no internal pull where the board provides the network (the
+     * H7S3 Nucleo does not: BTN_PULL). On the U575 the button pin must NEVER
+     * be driven as OUTPUT/LOW: UM2861 warns it shorts the button network. */
     ca_gpio_configure(BTN_PORT, BTN_PIN,
                       CA_GPIO_MODE_INPUT, CA_GPIO_OTYPE_PP,
-                      CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0U);
+                      CA_GPIO_SPEED_LOW, BTN_PULL, 0U);
 
-    /* RISING edge, but the line starts DISABLED: phase 1 is polling only. */
-    ca_exti_init(BTN_PORT, BTN_PIN, CA_EXTI_EDGE_RISING, cb_button);
+    /* Press edge (BTN_EDGE), but the line starts DISABLED: phase 1 is polling only. */
+    ca_exti_init(BTN_PORT, BTN_PIN, BTN_EDGE, cb_button);
     ca_exti_disable(BTN_PIN);
     g_exti_on = false;
 
@@ -340,10 +361,10 @@ static u32 task_poll_btn(void *arg)
         u32 cur = ca_gpio_read(BTN_PORT, BTN_PIN);
         if (cur != prev) {
             prev = cur;
-            if (cur == 1U)
-                ca_stdout_printf_n("EX30 POLL: B1 PRESSED  (" BTN_TXT "=1)");
+            if (cur == BTN_PRESSED_LVL)
+                ca_stdout_printf_n("EX30 POLL: B1 PRESSED  (" BTN_TXT "=%u)", cur);
             else
-                ca_stdout_printf_n("EX30 POLL: B1 RELEASED (" BTN_TXT "=0)");
+                ca_stdout_printf_n("EX30 POLL: B1 RELEASED (" BTN_TXT "=%u)", cur);
         }
         ca_os_sleep(100);
     }

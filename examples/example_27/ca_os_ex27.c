@@ -55,7 +55,8 @@
 
 #include "caos.h"
 
-#if EN_DAC && EN_ADC
+/* DAC1 is the CMSIS instance: absent on parts with no DAC (H7Rx/7Sx) */
+#if EN_DAC && EN_ADC && defined(DAC1)
 
 /* ============================================================================
  * CONFIGURATION
@@ -375,12 +376,16 @@ void ca_os_main(void)
     ca_os_run(true);
 }
 
-#else  /* EN_DAC && EN_ADC */
+#else  /* EN_DAC && EN_ADC, or no DAC on this part */
 
 /* Pre-scheduler diagnostic: ca_stdout_* needs a task context (TLB=NULL before
  * ca_os_run), so print straight to the console backend with PUT_N. */
 PRIVATE_STRING(m27a, "=== Example 27 ===");
+#ifndef DAC1
+PRIVATE_STRING(m27b, "no DAC on this part: DAC/ADC example skipped");
+#else
 PRIVATE_STRING(m27b, "EN_DAC / EN_ADC ==0, skipping DAC/ADC example");
+#endif
 void ca_os_configure(void)
 {
     /* The line the bench matches to know this example cannot run on
@@ -391,4 +396,4 @@ void ca_os_configure(void)
 }
 void ca_os_main(void) { ca_os_run(true); }
 
-#endif /* EN_DAC && EN_ADC */
+#endif /* EN_DAC && EN_ADC && DAC1 */

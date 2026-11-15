@@ -30,6 +30,12 @@
  *   pi_chain    L holds M1, M holds M0 and waits M1, H waits M0: L reaches H
  *   pi_setprio  L boosted, set_priority(L, LEVEL2): stays H while boosted,
  *               LEVEL2 after the unlock
+ *   mtx_restart L holds M0, H waits, L faults and is restarted: H gets M0,
+ *               L locks it again after ONE restart, at its own priority
+ *   mtx_remove  same with L removed by the fault: H gets M0
+ *   rmtx_*      the same two on a recursive mutex held twice by L
+ *   rw_wdie     rwlock writer removed by a fault: the next writer gets it
+ *   rw_rdie     rwlock reader restarted inside its section: the writer gets it
  *
  * No wiring.
  */
@@ -71,7 +77,15 @@ enum {
     OP_CWAIT,       /* cond wait on s_cv with mutex 0             */
     OP_CTWAIT,      /* b = ms, result -> s_ok[slot]               */
     OP_OWNER,       /* s_val[slot] = owns mutex 0                 */
-    OP_UNLOCK_OWNED /* unlock mutex 0 if owned                    */
+    OP_UNLOCK_OWNED,/* unlock mutex 0 if owned                    */
+    OP_FAULT_ONCE,  /* s_val[slot]++: safeguard on the first life */
+    OP_DIED,        /* a = mutex (b = 1: the rmutex, 2: the rwlock): owner_died -> s_ok[slot] */
+    OP_RLOCK,       /* rmutex, no timeout                         */
+    OP_RCOUNT,      /* a = slot of s_rec: rmutex count right now  */
+    OP_WLOCK,       /* s_rwa write side                           */
+    OP_WUNLOCK,
+    OP_RDLOCK,      /* s_rwa read side                            */
+    OP_RDUNLOCK
 };
 
 typedef struct {
@@ -86,10 +100,25 @@ static ca_mutex_t          s_mtx[E91_MUTEXES];
 static volatile u8      s_gate[8];
 static volatile u32     s_mark;
 static volatile u32     s_done;
+
+/* s_done is written by actors that can end at the same instant: a plain |= is
+ * a load-modify-store, and a preemption between the two drops the other
+ * task's bit - finish() then waits for a task that has already ended and
+ * reports STUCK. Seen on fpu_share on the H773, where the code runs from the
+ * XSPI flash and the window between load and store is wider. */
+static void bit_set(volatile u32 *word, u32 bit)
+{
+    u32 v;
+    do {
+        v = ca_ldrex(word) | (1UL << bit);
+    } while (ca_strex(word, v) != 0U);
+}
+#define done_set(slot)  bit_set(&s_done, (slot))
 static volatile u16     s_rec[8];
 static volatile bool    s_res[E91_MUTEXES];
 static volatile bool    s_abort;
 static ca_recursive_mutex_t s_rmtx;
+static ca_rwlock_t      s_rwa;      /* the actors' rwlock (s_rw is rw_excl's) */
 static ca_semaphore_t      s_sem;
 static CAQUEUE_STATIC_DEFINE(s_q, 8, sizeof(u32));
 static volatile bool    s_ok[E91_ACTORS];
@@ -127,7 +156,7 @@ static u32 task_actor(void *arg) {
         case OP_TLOCK:  s_res[op->a] = ca_mutex_timedlock(&s_mtx[op->a], op->b); break;
         case OP_UNLOCK: ca_mutex_unlock(&s_mtx[op->a]); break;
         case OP_GATE:   while (s_gate[op->a] == 0U && !s_abort) ca_os_sleep(1); break;
-        case OP_MARK:   s_mark |= (1UL << op->a); break;
+        case OP_MARK:   bit_set(&s_mark, op->a); break;   /* same race as s_done */
         case OP_PRIO:   s_rec[op->a] = own_priority(); break;
         case OP_RTRY:   s_ok[op->b] = ca_rmutex_trylock(&s_rmtx); break;
         case OP_RUNLOCK: ca_rmutex_unlock(&s_rmtx); break;
@@ -153,10 +182,25 @@ static u32 task_actor(void *arg) {
         case OP_UNLOCK_OWNED:
             if (ca_mutex_is_owner(&s_mtx[0])) ca_mutex_unlock(&s_mtx[0]);
             break;
+        case OP_FAULT_ONCE:
+            /* s_val counts the lives: a restart runs the script again */
+            if (s_val[slot]++ == 0U) CA_SAFEGUARD(0);
+            break;
+        case OP_DIED:
+            s_ok[slot] = (op->b == 2U) ? ca_rwlock_owner_died(&s_rwa)
+                       : (op->b == 1U) ? ca_rmutex_owner_died(&s_rmtx)
+                                       : ca_mutex_owner_died(&s_mtx[op->a]);
+            break;
+        case OP_WLOCK:    ca_rwlock_write_lock(&s_rwa); break;
+        case OP_WUNLOCK:  ca_rwlock_write_unlock(&s_rwa); break;
+        case OP_RDLOCK:   ca_rwlock_read_lock(&s_rwa); break;
+        case OP_RDUNLOCK: ca_rwlock_read_unlock(&s_rwa); break;
+        case OP_RLOCK:  ca_rmutex_lock(&s_rmtx); break;
+        case OP_RCOUNT: s_rec[op->a] = ca_rmutex_get_count(&s_rmtx); break;
         default: break;
         }
     }
-    s_done |= (1UL << slot);
+    done_set(slot);
     return 0;
 }
 
@@ -173,6 +217,7 @@ static void case_reset(void) {
         s_ok[i] = false; s_val[i] = 0U; s_tmo[i] = 0U; s_t0[i] = 0U; s_t1[i] = 0U;
     }
     ca_rmutex_init(&s_rmtx);
+    ca_rwlock_init(&s_rwa);
     ca_cond_init(&s_cv);
     ca_sem_init(&s_sem, "e91", 0U, 8U);
     ca_queue_static_reset(&s_q.q);
@@ -185,11 +230,15 @@ static const char *const s_actor_name[E91_ACTORS] = {
     "e91_a0", "e91_a1", "e91_a2", "e91_a3", "e91_a4", "e91_a5", "e91_a6", "e91_a7"
 };
 
-static bool spawn(u32 slot, u16 prio, const act_op_t *script) {
+static bool spawn_fault(u32 slot, u16 prio, const act_op_t *script, u8 fault) {
     s_script[slot] = script;
     s_h[slot] = ca_os_job(s_actor_name[slot], prio, task_actor, (void *)(uintptr_t)slot, STACK_SMALL,
-                          CA_JOB_STD, CA_FAULT_ASSERT);
+                          CA_JOB_STD, fault);
     return s_h[slot] != CA_TASK_HANDLE_NONE;
+}
+
+static bool spawn(u32 slot, u16 prio, const act_op_t *script) {
+    return spawn_fault(slot, prio, script, CA_FAULT_ASSERT);
 }
 
 static bool wait_mark(u32 bits) {
@@ -343,11 +392,154 @@ static bool case_pi_kill(const char *name) {
     const bool removed = ca_os_remove_job_handle(s_h[1]);
     ca_os_sleep(E91_SETTLE_MS);
     const u16 after = prio_of(s_h[0]);
-    s_done |= (1UL << 1);                   /* H will never set it */
+    done_set(1);                   /* H will never set it */
     const bool out = finish(2U);
     const bool ok = made && removed && out && boosted == PRIO_H && after == PRIO_L;
     SAY(name, ok, "L boosted=%u, after H removed while waiting=%u (want %u)%s",
         boosted, after, PRIO_L, out ? "" : " STUCK");
+    return ok;
+}
+
+/* ---- owner of a mutex dies --------------------------------------------- */
+
+/* L (fault policy RESTART) holds M0 with H waiting, then faults. The restart
+ * must not leave M0 owned by L: H gets it, and L's script, run again from the
+ * top, locks M0 once more and ends after ONE restart, back at its own priority. */
+static bool case_mtx_restart(const char *name) {
+    static const act_op_t L[] = { {OP_LOCK,0,0}, {OP_DIED,0,0}, {OP_MARK,0,0},
+                                  {OP_GATE,0,0}, {OP_FAULT_ONCE,0,0}, {OP_UNLOCK,0,0},
+                                  {OP_PRIO,0,0}, {OP_MARK,1,0}, {OP_END,0,0} };
+    static const act_op_t H[] = { {OP_LOCK,0,0}, {OP_DIED,0,0}, {OP_UNLOCK,0,0},
+                                  {OP_MARK,2,0}, {OP_END,0,0} };
+    case_reset();
+    bool made = spawn_fault(0, PRIO_L, L, CA_FAULT_RESTART_THREAD) && wait_mark(1U << 0);
+    made = made && spawn(1, PRIO_H, H);
+    ca_os_sleep(E91_SETTLE_MS);
+    s_gate[0] = 1U;                         /* L faults holding M0 */
+    const bool got = wait_mark((1U << 1) | (1U << 2));
+    const u32 lives = s_val[0];
+    const bool out = finish(2U);
+    const bool ok = made && got && out && lives == 2U && s_rec[0] == PRIO_L &&
+                    s_ok[1] && !s_ok[0];
+    SAY(name, ok, "H got M0=%u died=%u (want 1), L ended=%u lives=%u (want 2) prio=%u (want %u) died=%u (want 0)%s",
+        (s_mark >> 2) & 1U, s_ok[1] ? 1U : 0U, (s_mark >> 1) & 1U, lives, s_rec[0], PRIO_L,
+        s_ok[0] ? 1U : 0U, out ? "" : " STUCK");
+    return ok;
+}
+
+/* L (fault policy ASSERT) holds M0 with H waiting, then faults and is
+ * removed: M0 must not stay owned by a task that no longer exists. */
+static bool case_mtx_remove(const char *name) {
+    static const act_op_t L[] = { {OP_LOCK,0,0}, {OP_MARK,0,0}, {OP_GATE,0,0},
+                                  {OP_FAULT_ONCE,0,0}, {OP_UNLOCK,0,0}, {OP_END,0,0} };
+    static const act_op_t H[] = { {OP_LOCK,0,0}, {OP_DIED,0,0}, {OP_UNLOCK,0,0},
+                                  {OP_MARK,2,0}, {OP_END,0,0} };
+    case_reset();
+    bool made = spawn(0, PRIO_L, L) && wait_mark(1U << 0);
+    made = made && spawn(1, PRIO_H, H);
+    ca_os_sleep(E91_SETTLE_MS);
+    s_gate[0] = 1U;                         /* L faults holding M0, removed */
+    const bool got = wait_mark(1U << 2);
+    done_set(0);                   /* L will never set it */
+    const bool out = finish(2U);
+    const bool ok = made && got && out && s_ok[1];
+    SAY(name, ok, "H got M0 after its owner was removed=%u, owner_died=%u (want 1)%s",
+        got ? 1U : 0U, s_ok[1] ? 1U : 0U, out ? "" : " STUCK");
+    return ok;
+}
+
+/* The same two cases on a recursive mutex, held twice by L: it is a mutex
+ * plus a count, so H also boosts L while it waits, and the count of the dead
+ * owner never reaches the next one. */
+static bool case_rmtx_restart(const char *name) {
+    static const act_op_t L[] = { {OP_RLOCK,0,0}, {OP_RLOCK,0,0}, {OP_DIED,0,1},
+                                  {OP_MARK,0,0}, {OP_GATE,0,0}, {OP_FAULT_ONCE,0,0},
+                                  {OP_RCOUNT,1,0}, {OP_RUNLOCK,0,0}, {OP_RUNLOCK,0,0},
+                                  {OP_PRIO,0,0}, {OP_MARK,1,0}, {OP_END,0,0} };
+    static const act_op_t H[] = { {OP_RLOCK,0,0}, {OP_DIED,0,1}, {OP_RCOUNT,2,0},
+                                  {OP_RUNLOCK,0,0}, {OP_MARK,2,0}, {OP_END,0,0} };
+    case_reset();
+    bool made = spawn_fault(0, PRIO_L, L, CA_FAULT_RESTART_THREAD) && wait_mark(1U << 0);
+    made = made && spawn(1, PRIO_H, H);
+    ca_os_sleep(E91_SETTLE_MS);
+    const u16 boosted = prio_of(s_h[0]);
+    s_gate[0] = 1U;                         /* L faults holding the rmutex twice */
+    const bool got = wait_mark((1U << 1) | (1U << 2));
+    const u32 lives = s_val[0];
+    const bool out = finish(2U);
+    const bool ok = made && got && out && lives == 2U && boosted == PRIO_H &&
+                    s_ok[1] && s_rec[2] == 1U && !s_ok[0] && s_rec[1] == 2U &&
+                    s_rec[0] == PRIO_L;
+    SAY(name, ok, "boost=%u H:died,cnt=%u,%u L:lives,died,cnt,prio=%u,%u,%u,%u (want %u 1,1 2,0,2,%u)%s",
+        boosted, s_ok[1] ? 1U : 0U, s_rec[2], lives, s_ok[0] ? 1U : 0U,
+        s_rec[1], s_rec[0], PRIO_H, PRIO_L, out ? "" : " STUCK");
+    return ok;
+}
+
+static bool case_rmtx_remove(const char *name) {
+    static const act_op_t L[] = { {OP_RLOCK,0,0}, {OP_RLOCK,0,0}, {OP_MARK,0,0},
+                                  {OP_GATE,0,0}, {OP_FAULT_ONCE,0,0}, {OP_END,0,0} };
+    static const act_op_t H[] = { {OP_RLOCK,0,0}, {OP_DIED,0,1}, {OP_RCOUNT,2,0},
+                                  {OP_RUNLOCK,0,0}, {OP_MARK,2,0}, {OP_END,0,0} };
+    case_reset();
+    bool made = spawn(0, PRIO_L, L) && wait_mark(1U << 0);
+    made = made && spawn(1, PRIO_H, H);
+    ca_os_sleep(E91_SETTLE_MS);
+    s_gate[0] = 1U;                         /* L faults holding it twice, removed */
+    const bool got = wait_mark(1U << 2);
+    done_set(0);                   /* L will never set it */
+    const bool out = finish(2U);
+    const bool ok = made && got && out && s_ok[1] && s_rec[2] == 1U;
+    SAY(name, ok, "H got it=%u, owner_died=%u count=%u (want 1 1)%s",
+        got ? 1U : 0U, s_ok[1] ? 1U : 0U, s_rec[2], out ? "" : " STUCK");
+    return ok;
+}
+
+/* rwlock writer W1 removed by a fault while R (reader) and W2 (writer) wait:
+ * write-preferring, so W2 gets it first and is told owner_died; R enters
+ * after W2's unlock, which cleared the flag. */
+static bool case_rw_wdie(const char *name) {
+    static const act_op_t W1[] = { {OP_WLOCK,0,0}, {OP_MARK,0,0}, {OP_GATE,0,0},
+                                   {OP_FAULT_ONCE,0,0}, {OP_WUNLOCK,0,0}, {OP_END,0,0} };
+    static const act_op_t R[]  = { {OP_RDLOCK,0,0}, {OP_DIED,0,2}, {OP_RDUNLOCK,0,0},
+                                   {OP_MARK,1,0}, {OP_END,0,0} };
+    static const act_op_t W2[] = { {OP_WLOCK,0,0}, {OP_DIED,0,2}, {OP_WUNLOCK,0,0},
+                                   {OP_MARK,2,0}, {OP_END,0,0} };
+    case_reset();
+    bool made = spawn(0, PRIO_L, W1) && wait_mark(1U << 0);
+    made = made && spawn(1, PRIO_M, R) && spawn(2, PRIO_M, W2);
+    ca_os_sleep(E91_SETTLE_MS);
+    s_gate[0] = 1U;                         /* W1 faults holding the write side */
+    const bool got = wait_mark((1U << 1) | (1U << 2));
+    done_set(0);                   /* W1 will never set it */
+    const bool out = finish(3U);
+    const bool ok = made && got && out && s_ok[2] && !s_ok[1];
+    SAY(name, ok, "R and W2 got it=%u, W2 died=%u (want 1), R died=%u (want 0)%s",
+        got ? 1U : 0U, s_ok[2] ? 1U : 0U, s_ok[1] ? 1U : 0U, out ? "" : " STUCK");
+    return ok;
+}
+
+/* Reader R1 (policy RESTART) faults inside its read section with W waiting:
+ * its read side is released, W enters, and R1 run again from the top takes
+ * the read side once more - no 'read twice' safeguard, its bit was cleared. */
+static bool case_rw_rdie(const char *name) {
+    static const act_op_t R1[] = { {OP_RDLOCK,0,0}, {OP_MARK,0,0}, {OP_GATE,0,0},
+                                   {OP_FAULT_ONCE,0,0}, {OP_RDUNLOCK,0,0}, {OP_MARK,1,0},
+                                   {OP_END,0,0} };
+    static const act_op_t W[]  = { {OP_WLOCK,0,0}, {OP_DIED,0,2}, {OP_WUNLOCK,0,0},
+                                   {OP_MARK,2,0}, {OP_END,0,0} };
+    case_reset();
+    bool made = spawn_fault(0, PRIO_L, R1, CA_FAULT_RESTART_THREAD) && wait_mark(1U << 0);
+    made = made && spawn(1, PRIO_M, W);
+    ca_os_sleep(E91_SETTLE_MS);
+    s_gate[0] = 1U;                         /* R1 faults holding the read side */
+    const bool got = wait_mark((1U << 1) | (1U << 2));
+    const u32 lives = s_val[0];
+    const bool out = finish(2U);
+    const bool ok = made && got && out && lives == 2U && !s_ok[1];
+    SAY(name, ok, "W got it=%u died=%u (want 0), R1 ended=%u lives=%u (want 2)%s",
+        (s_mark >> 2) & 1U, s_ok[1] ? 1U : 0U, (s_mark >> 1) & 1U, lives,
+        out ? "" : " STUCK");
     return ok;
 }
 
@@ -630,7 +822,7 @@ static u32 task_rw_writer(void *arg) {
         s_rw_writes++;
         ca_os_yield();
     }
-    s_done |= (1UL << slot);
+    done_set(slot);
     return 0;
 }
 
@@ -646,7 +838,7 @@ static u32 task_rw_reader(void *arg) {
         ca_rwlock_read_unlock(&s_rw);
         s_rw_reads++;
     }
-    s_done |= (1UL << slot);
+    done_set(slot);
     return 0;
 }
 
@@ -690,7 +882,7 @@ static u32 task_coop(void *arg) {
         s_coop_count = c + 1U;
         ca_spinlock_unlock_cooperative(&s_coop);
     }
-    s_done |= (1UL << slot);
+    done_set(slot);
     return 0;
 }
 
@@ -885,6 +1077,10 @@ static volatile bool    s_fp_run;
 static volatile u32     s_fp_rounds[E91_FP_TASKS];
 static volatile u32     s_fp_bad[E91_FP_TASKS];
 static volatile u32     s_spin_rounds;
+/* Always 0, but volatile: the seed is read every round, so the compiler can
+ * not fold fp_series() into a constant and hoist it out of the loop (it did:
+ * the loop ran no FP instruction at all). */
+static volatile u32     s_fp_zero;
 
 /* Leibniz-style series on eight accumulators: enough live S registers that a
  * context switch which loses or mixes them changes the sum. Deterministic, so
@@ -906,10 +1102,10 @@ static u32 task_fp(void *arg) {
     const u32 slot = (u32)(uintptr_t)arg;
     const u32 ref = fp_series(slot);
     while (s_fp_run) {
-        if (fp_series(slot) != ref) s_fp_bad[slot]++;
+        if (fp_series(slot + s_fp_zero) != ref) s_fp_bad[slot]++;
         s_fp_rounds[slot]++;
     }
-    s_done |= (1UL << slot);
+    done_set(slot);
     return 0;
 }
 
@@ -919,10 +1115,16 @@ static u32 task_spin(void *arg) {      /* no FP context: mixes the switches */
         s_spin_rounds++;
         if ((s_spin_rounds & 63U) == 0U) ca_os_yield();
     }
-    s_done |= (1UL << slot);
+    done_set(slot);
     return 0;
 }
 
+/* Was a known failure on the H773 (48 KB PSP arena) until the stack arena
+ * merged freed neighbours (02/11/2026): FP tasks are raised to STACK_MEDIUM
+ * (4 KB), and after scr_tmo had turned 16 KB of the arena into 2 KB blocks
+ * that a 4 KB request could not reuse, the third FP stack was missing -
+ * "[SAFEGUARD] create ... no stack block of 4096 B", made=0, and finish()
+ * waited for tasks never created: STUCK. Now covered by stk_arena too. */
 static bool case_fpu_share(const char *name) {
     case_reset();
     s_fp_run = true;
@@ -947,9 +1149,89 @@ static bool case_fpu_share(const char *name) {
     const bool ok = made && out && bad == 0U && idle == 0U;
     SAY(name, ok, "3 FP tasks + 1 integer task for %u ms: rounds=%u wrong=%u (want 0)%s",
         E91_FP_MS, rounds, bad, out ? "" : " STUCK");
+    if (!out) {
+        CLI_PRINTF_N("[e91]   made=%u done=0x%x fp=%u/%u/%u spin=%u h=%x/%x/%x/%x",
+                     made ? 1U : 0U, (u32)s_done, s_fp_rounds[0], s_fp_rounds[1],
+                     s_fp_rounds[2], s_spin_rounds, (u32)s_h[0], (u32)s_h[1],
+                     (u32)s_h[2], (u32)s_h[3]);
+    }
     return ok;
 }
 #endif
+
+/* ---- PSP stack arena ----------------------------------------------------- */
+
+/* Each actor waits on its own gate, marks and ends: the gates open in a
+ * scrambled order, so the stacks come back out of address order. */
+static const act_op_t s_gate_actor[E91_ACTORS][3] = {
+    { {OP_GATE,0,0}, {OP_MARK,0,0}, {OP_END,0,0} }, { {OP_GATE,1,0}, {OP_MARK,1,0}, {OP_END,0,0} },
+    { {OP_GATE,2,0}, {OP_MARK,2,0}, {OP_END,0,0} }, { {OP_GATE,3,0}, {OP_MARK,3,0}, {OP_END,0,0} },
+    { {OP_GATE,4,0}, {OP_MARK,4,0}, {OP_END,0,0} }, { {OP_GATE,5,0}, {OP_MARK,5,0}, {OP_END,0,0} },
+    { {OP_GATE,6,0}, {OP_MARK,6,0}, {OP_END,0,0} }, { {OP_GATE,7,0}, {OP_MARK,7,0}, {OP_END,0,0} },
+};
+
+static bool spawn_sized(u32 slot, ca_stack_size_t size) {
+    s_script[slot] = s_gate_actor[slot];
+    s_h[slot] = ca_os_job(s_actor_name[slot], PRIO_M, task_actor, (void *)(uintptr_t)slot, size,
+                          CA_JOB_STD, CA_FAULT_ASSERT);
+    return s_h[slot] != CA_TASK_HANDLE_NONE;
+}
+
+/* The stacks of ended tasks go back at the next pass of the scheduler, not
+ * when the task returns: wait for the arena to come back to `want`. */
+static bool arena_back_to(u32 want) {
+    for (u32 t = 0U; ca_ccm_get_free() != want && t < E91_WAIT_MS; t++) ca_os_sleep(1);
+    return ca_ccm_get_free() == want;
+}
+
+/* The arena used to reuse a freed stack only for the same size and never
+ * merged neighbours: after scr_tmo (8 x STACK_SMALL) the 4 KB stack of
+ * fpu_share could not be had on the H773. Two checks:
+ *  1. 8 stacks of mixed size, freed out of order, leave the arena as they
+ *     found it: same free bytes, same largest segment, same segment count;
+ *  2. 8 STACK_SMALL freed side by side make room for one 4 x STACK_SMALL. */
+static bool case_stack_arena(const char *name) {
+    static const u8 order[E91_ACTORS] = { 5U, 1U, 7U, 3U, 0U, 6U, 2U, 4U };
+    const u32 free0 = ca_ccm_get_free();
+    const u32 big0  = ca_ccm_get_largest_free();
+    const u32 seg0  = ca_ccm_get_segments();
+
+    case_reset();
+    bool made = true;
+    for (u32 i = 0U; i < E91_ACTORS && made; i++) {
+        made = spawn_sized(i, (i & 1U) ? STACK_MEDIUM : STACK_SMALL);
+    }
+    const u32 seg_busy = ca_ccm_get_segments();
+    for (u32 i = 0U; i < E91_ACTORS; i++) {
+        s_gate[order[i]] = 1U;
+        (void)wait_mark(1UL << order[i]);
+    }
+    const bool out = finish(E91_ACTORS);
+    const bool back = arena_back_to(free0);
+    const u32 big1 = ca_ccm_get_largest_free();
+    const u32 seg1 = ca_ccm_get_segments();
+    const bool merged = back && big1 == big0 && seg1 == seg0;
+
+    /* 2: the fragmentation that failed on the H773 */
+    case_reset();
+    bool made2 = true;
+    for (u32 i = 0U; i < E91_ACTORS && made2; i++) made2 = spawn_sized(i, STACK_SMALL);
+    const bool out2 = finish(E91_ACTORS);
+    const bool back2 = arena_back_to(free0);
+    case_reset();
+    bool big_ok = true;
+    if ((u32)STACK_SMALL * 4U <= big0) {
+        big_ok = spawn_sized(0U, (ca_stack_size_t)(STACK_SMALL * 4U));
+        big_ok = finish(1U) && big_ok;
+        big_ok = arena_back_to(free0) && big_ok;
+    }
+
+    const bool ok = made && out && merged && made2 && out2 && back2 && big_ok;
+    SAY(name, ok, "free %u->%u B, largest %u->%u B, segments %u (busy %u) -> %u, "
+        "4xSMALL after 8xSMALL %s", free0, ca_ccm_get_free(), big0, big1, seg0, seg_busy, seg1,
+        big_ok ? "ok" : "NO ROOM");
+    return ok;
+}
 
 /* ---- case table, CLI ----------------------------------------------------- */
 
@@ -967,6 +1249,12 @@ static const e91_case_t s_cases[] = {
     { "pi_setprio", case_pi_setprio,   "PI: set_priority on a boosted owner is kept" },
     { "pi_kill",    case_pi_kill,      "PI: a waiter removed while waiting takes its boost back" },
     { "pi_hopcap",  case_pi_hopcap,    "PI: the chain walk stops at CA_PI_MAX_CHAIN hops" },
+    { "mtx_restart",case_mtx_restart,  "owner restarted by a fault: mutex released, one restart" },
+    { "mtx_remove", case_mtx_remove,   "owner removed by a fault: its waiter gets the mutex" },
+    { "rmtx_restart",case_rmtx_restart,"recursive: owner restarted holding it twice, count clean" },
+    { "rmtx_remove",case_rmtx_remove,  "recursive: owner removed holding it twice, waiter gets it" },
+    { "rw_wdie",    case_rw_wdie,      "rwlock: writer removed, next writer told owner_died" },
+    { "rw_rdie",    case_rw_rdie,      "rwlock: reader restarted inside its section, writer enters" },
     { "rmutex_cnt", case_rmutex_count, "recursive mutex is free only at count zero" },
     { "wake_pend",  case_wake_pending, "wake_up on a task waiting on a semaphore" },
     { "reset_wait", case_reset_waiters,"queue reset with receivers waiting" },
@@ -983,6 +1271,7 @@ static const e91_case_t s_cases[] = {
     { "tmr_rearm",  case_tmr_rearm_in_cb, "timer: one-shot re-armed from its own callback" },
     { "tmr_same",   case_tmr_same_tick,   "timer: 8 armed together all fire" },
     { "tmr_period", case_tmr_period,      "timer: set_period applies from the next cycle" },
+    { "stk_arena",  case_stack_arena,     "stack arena: freed stacks merge, a big one fits again" },
 #if (__FPU_PRESENT == 1) && (__FPU_USED == 1)
     { "fpu_share",  case_fpu_share,       "FPU: preempted FP tasks keep their registers" },
 #endif

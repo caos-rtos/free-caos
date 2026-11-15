@@ -1,0 +1,35 @@
+// NUCLEO-F446ZE (MB1137), SRAM 128 KB, flash 512 KB
+// on top of Renode's stm32f4 model (stm32f429 adds only the LTDC).
+// Console: USART3 (UART_DBG_NUM=3, PD8/PD9 -> ST-LINK VCP).
+using "stm32f4_caos.repl"   // simu/gen_platforms.py, adds the ADC stub
+
+sram:
+    size: 0x20000
+
+flash:
+    size: 0x80000
+
+// stm32f4.repl clocks SysTick at 72 MHz; caOS runs the F4 at 168 MHz.
+nvic:
+    systickFrequency: 168000000
+
+// See nucleo_h753.repl: polled SysTick waits end in seconds.
+cpu:
+    cpuType: "cortex-m4f"
+    PerformanceInMips: 20
+
+// Holes of the memory map: an access is a BusFault, as on silicon (busfault_hole.py).
+// Flash hole ends below the CCM (0x10000000), RAM hole below the bit-band alias (0x22000000).
+hole_flash: Python.PythonPeripheral @ sysbus 0x08080000
+    size: 0x07F80000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''
+
+hole_ram: Python.PythonPeripheral @ sysbus 0x20020000
+    size: 0x01FE0000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''

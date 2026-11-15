@@ -74,7 +74,7 @@
  * (also PA5-PA7 per UM3115), F767 and F746 (UM1974 note 2: PA7 is D11 AND,
  * with JP6 ON, the PHY's RMII_DV). Those boards move SPI1 to PB3/PB4/PB5,
  * which reach the morpho CN12-31/27/29 on both board families. */
-#if MCU_ID == 563 || MCU_ID == 767 || MCU_ID == 746
+#if MCU_ID == 563 || MCU_ID == 439 || MCU_ID == 767 || MCU_ID == 746
 #define EX65_ALT_GPIO  true
 #else
 #define EX65_ALT_GPIO  false
@@ -114,7 +114,7 @@
 #define EX65_SCK_PIN    CA_GPIO_PIN_5
 #define EX65_MISO_PORT  CA_GPIO_PORT_A
 #define EX65_MISO_PIN   CA_GPIO_PIN_6
-#if MCU_ID == 753 || MCU_ID == 747
+#if MCU_ID == 753 || MCU_ID == 747 || MCU_ID == 773   /* PHY on PA7: D11 = PB5 */
 #define EX65_MOSI_PORT  CA_GPIO_PORT_B
 #define EX65_MOSI_PIN   CA_GPIO_PIN_5
 #define EX65_PIN_MOSI   "PB5"
@@ -151,6 +151,9 @@
         CLI_PUT_N("  MOSI  " EX65_POS_MOSI "  this board " EX65_PIN_MOSI);           \
         CLI_PUT_N("  CS    " EX65_POS_CS   "  this board " EX65_PIN_CS);             \
         CLI_PUT_N("  GND   " EX65_POS_GND);                                       \
+        CLI_PUT_N("  GND   CN8-11  and  CN10-5   (extra grounds: without them the"); \
+        CLI_PUT_N("        traffic bounced CS - 78 false edges per frame, H773 02/11)"); \
+        CLI_PUT_N("        NOT CN8-9 (5V) nor CN8-15 (VIN), NOT CN10-3 (AGND)");      \
     } while (0)
 
 /* Set by "s65 wire": the transfer tasks drive these pins through SPI and would

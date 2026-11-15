@@ -261,6 +261,22 @@ static bool pfc_case(const char *grp, ca_dma2d_fmt_t in, ca_dma2d_fmt_t out, u8 
     return verdict(label, ran, out);
 }
 
+#if !defined(DMA2D_FGPFCCR_AI)
+/* DMA2D without AI/RBS (F439): the driver must refuse the flag, not ignore it */
+static bool refused_case(const char *label, u8 sflags, u8 dflags, u32 seed)
+{
+    prepare(seed);
+    ca_dma2d_src_t s = src_at(s_fg, s_clut_fg, CA_DMA2D_ARGB4444, SX, SY);
+    s.flags = sflags;
+    ca_dma2d_dst_t d = dst_at(CA_DMA2D_ARGB8888, DX, DY);
+    d.flags = dflags;
+    const bool ran = ca_dma2d_convert(&s, &d, RW, RH, TMO_MS);
+    const bool ok  = !ran && (ca_dma2d_errors() & CA_DMA2D_ERR_ARG) != 0U;
+    if (!ok) CLI_PRINTF_N("D2D   %s: accepted, but this DMA2D has no AI/RBS", label);
+    return ok;
+}
+#endif
+
 /* ---------------------------------------------------------------- groups */
 
 typedef struct { u32 good, runs; } tally_t;
@@ -328,10 +344,17 @@ static tally_t g_alpha(void)
     count(&t, pfc_case("alpha", in, out, 0U, 0U, CA_DMA2D_ALPHA_KEEP, 0x80U, RW, RH, 500U));
     count(&t, pfc_case("alpha", in, out, 0U, 0U, CA_DMA2D_ALPHA_REPLACE, 0x80U, RW, RH, 501U));
     count(&t, pfc_case("alpha", in, out, 0U, 0U, CA_DMA2D_ALPHA_MULT, 0x80U, RW, RH, 502U));
+#if defined(DMA2D_FGPFCCR_AI)
     count(&t, pfc_case("alpha ai-in", in, out, CA_DMA2D_AI, 0U, CA_DMA2D_ALPHA_KEEP, 0U, RW, RH, 503U));
     count(&t, pfc_case("alpha rbs-in", in, out, CA_DMA2D_RBS, 0U, CA_DMA2D_ALPHA_KEEP, 0U, RW, RH, 504U));
     count(&t, pfc_case("alpha ai-out", in, out, 0U, CA_DMA2D_AI, CA_DMA2D_ALPHA_KEEP, 0U, RW, RH, 505U));
     count(&t, pfc_case("alpha rbs-out", in, out, 0U, CA_DMA2D_RBS, CA_DMA2D_ALPHA_KEEP, 0U, RW, RH, 506U));
+#else
+    count(&t, refused_case("alpha ai-in refused", CA_DMA2D_AI, 0U, 503U));
+    count(&t, refused_case("alpha rbs-in refused", CA_DMA2D_RBS, 0U, 504U));
+    count(&t, refused_case("alpha ai-out refused", 0U, CA_DMA2D_AI, 505U));
+    count(&t, refused_case("alpha rbs-out refused", 0U, CA_DMA2D_RBS, 506U));
+#endif
     return t;
 }
 

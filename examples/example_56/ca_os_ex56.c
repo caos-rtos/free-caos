@@ -50,7 +50,7 @@
 #define USB_NUM      1U    /* OTG_FS CN14 without ULPI — change to 0 if ULPI is available */
 #define EP_BULK_MPS  64U   /* 64 for OTG_FS, 512 for OTG_HS ULPI */
 
-#elif MCU_ID == 407 || MCU_ID == 767
+#elif MCU_ID == 407 || MCU_ID == 439 || MCU_ID == 767
 #define USB_NUM      0U
 #define EP_BULK_MPS  64U
 
@@ -63,6 +63,10 @@
 
 #elif MCU_ID == 563
 #define USB_NUM      0U          /* USB_DRD_FS — single instance H563 */
+#define EP_BULK_MPS  64U
+
+#elif MCU_ID == 773
+#define USB_NUM      0U          /* OTG_HS, integrated HS PHY run at FS (Type-C CN2) */
 #define EP_BULK_MPS  64U
 
 #else
@@ -78,7 +82,7 @@
 /* F407 OTG_FS has only 3 data EPs (EP1..3): the 3-class composite (5 EPs) does not
  * fit → on F407 this example is NCM+MSC (2 classes, EP1/2 NCM + EP3 MSC),
  * without CDC. On U575/H753 it remains CDC+MSC+NCM (5 EPs). */
-#if MCU_ID == 407
+#if MCU_ID == 407 || MCU_ID == 439
 #define EX56_HAS_CDC  0   /* F407 OTG_FS: 3 data EPs → only NCM+MSC */
 #else
 #define EX56_HAS_CDC  1   /* H563/H753/U575: ≥5 data EPs → CDC+MSC+NCM */
@@ -159,7 +163,7 @@ static u32 task_echo(void *arg)
  * ════════════════════════════════════════════════════════════════════════════ */
 
 #define BLK_SIZE   512U
-#if MCU_ID == 407
+#if MCU_ID == 407 || MCU_ID == 439
 #define BLK_COUNT  128U                  /* F407: 64 KB (RAM 128K, minimum FAT12) */
 #else
 #define BLK_COUNT  256U                  /* 256 * 512 = 128 KB */
@@ -200,7 +204,6 @@ static const ca_ipv4_t s_ip  = { .v = { 192U, 168U, 10U, 56U } };
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .v = { 192U, 168U, 10U, 56U } },
     .mac  = { .v = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x56U } },
-    .arp  = { .renew_ms = 30000U, .cache_size = 0U },
     .udp  = { .bindings = {{0}}, .count = 0U },
     .icmp = { .echo_reply = true },
 };

@@ -1,0 +1,17 @@
+# Board fixups applied after LoadELF (run.sh includes nucleo_<board>.resc).
+# The image is linked at 0x70000000 (XSPI2): on the board the trampoline sets
+# VTOR there and jumps; here the core starts from that vector table directly.
+cpu VectorTableOffset 0x70000000
+cpu InitVectorTableOffset 0x70000000   # and at every reset (CHANGES.md 27)
+# Unique ID (system memory, 0 in Renode): app_3 derives its MAC and role from it.
+sysbus WriteDoubleWord 0x08FFF800 0x00470021
+sysbus WriteDoubleWord 0x08FFF804 0x30345108
+sysbus WriteDoubleWord 0x08FFF808 0x34323433
+# DBGMCU IDCODE: DEV_ID 0x485 (STM32H7Rx/7Sx), as the bench reads it.
+sysbus Tag <0x5C001000, 0x5C001003> "DBGMCU_IDCODE" 0x00001485 false true
+# Factory calibration reads 0 in Renode: ca_temp_hw_convert() divides by
+# TS_CAL2-TS_CAL1 -> DIVBYZERO in the banner task. Same addresses and values as
+# the H563 (temp_sensor_h7rsxx.c comes from the H5): ~25 C with the ADC stub.
+sysbus WriteWord 0x08FFF814 4050   # TS_CAL1 (30 C)
+sysbus WriteWord 0x08FFF818 5050   # TS_CAL2 (130 C)
+sysbus WriteWord 0x08FFF810 4000   # VREFINT_CAL

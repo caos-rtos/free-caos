@@ -77,7 +77,7 @@
  *
  * Tested on MCU_ID, not on MCU: the family names are not numeric macros, so
  * "MCU == F4xx" compares 0 with 0 and holds everywhere. */
-#if MCU_ID == 407 || MCU_ID == 429 || MCU_ID == 446
+#if MCU_ID == 407 || MCU_ID == 439 || MCU_ID == 446
 #define EX63_NO_FREE_UART  1
 #endif
 

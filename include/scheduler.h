@@ -67,14 +67,25 @@ typedef enum ca_job_type_t{
 
 
 /**
- * @brief Returns available CCM bytes
+ * @brief Returns the free bytes of the PSP stack arena (all free segments)
  */
 u32 ca_ccm_get_free(void);
 
 /**
- * @brief Returns used CCM bytes
+ * @brief Returns the bytes of the PSP stack arena held by task stacks
  */
 u32 ca_ccm_get_used(void);
+
+/**
+ * @brief Returns the largest free segment of the PSP stack arena: the biggest
+ *        stack that can be created right now
+ */
+u32 ca_ccm_get_largest_free(void);
+
+/**
+ * @brief Returns the number of segments (free and busy) of the PSP stack arena
+ */
+u32 ca_ccm_get_segments(void);
 
 
 /* =============================================================================
@@ -127,7 +138,7 @@ u32 ca_ccm_get_used(void);
 #define     CA_FAULT_ASSERT              0x00  /* Default: remove task */
 #define     CA_FAULT_RESTART_THREAD           0x01  /* Restart task with same params */
 #define     CA_FAULT_EXEC_EMERGENCY           0x02  /* Execute emergency handler */
-#define     CA_FAULT_CHECK                    0x03  /* per check */
+#define     CA_FAULT_EMERGENCY_RESTART        0x03  /* Emergency handler, then restart */
 /* =============================================================================
  * DATA STRUCTURES
  * ============================================================================= */
@@ -432,7 +443,10 @@ typedef enum ca_scheduler_tasks_info_mode_tag{
     TH_INFO_ASSERT
 } ca_scheduler_tasks_info_mode;
 
-void ca_scheduler_tasks_info(ca_scheduler_tasks_info_mode mode);
+/** @brief CLI 'top': CPU share of each task over a window of window_ms
+ *  (sleeps that long, clamped to 100 ms .. the u32 runtime wrap), against
+ *  wall time from the tick; last line: scheduler and free time (WFI). */
+void ca_scheduler_tasks_info(ca_scheduler_tasks_info_mode mode, u32 window_ms);
 /** @brief CLI 'sched': CPU split since the previous call - context switch,
  *  tasks, idle, and free time (WFI) against wall time from the tick. */
 void ca_scheduler_sched_info(void);

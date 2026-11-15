@@ -16,7 +16,7 @@
 #   sudo ./test/run_test.sh -m U575 -n ex68 -r     # + report <date>_U575.xml/.html
 #
 # Options:
-#   -m MCU    MCU of the run (F446 F767 H563 H753 U575). The elfs must already
+#   -m MCU    MCU of the run (F439 F446 F767 H563 H753 H773 U575). The elfs must already
 #             exist in elfs/<MCU>/ (build them with ./do). Exported as CAOS_MCU.
 #   -r [NAME] write the report NAME.xml + NAME.html; without NAME (or when an
 #             option follows) the name is <YYYY-MM-DD_HHMM>_<MCU>
@@ -53,13 +53,14 @@ mcu_device_ids() {
     case "$1" in
         F103)      echo "0x410 0x412 0x414 0x418 0x420 0x428 0x430" ;;
         F407|F417) echo "0x413" ;;
-        F429)      echo "0x419" ;;
+        F439)      echo "0x419" ;;   # F42x/F43x
         F446)      echo "0x421" ;;
         F746)      echo "0x449" ;;
         F767)      echo "0x451" ;;
         H563)      echo "0x484" ;;
         H747|H753) echo "0x450" ;;   # same ID: told apart by the Board line
         U575)      echo "0x482" ;;
+        H773|H763) echo "0x485" ;;   # STM32H7Rx/7Sx (H7S3 / H7R3)
         *)         echo "" ;;
     esac
 }
@@ -145,6 +146,12 @@ check_board() {
         return 1
     fi
     local num="${MCU#?}"
+    # caOS names that are not the part number the board declares
+    # (same map as stlink_pick.sh): H773 = NUCLEO-H7S3L8, H763 = H7R3
+    case $num in
+        773) num="H7S3" ;;
+        763) num="H7R3" ;;
+    esac
     if [ -n "$board" ] && ! printf '%s' "$board" | grep -q -- "$num"; then
         echo "ERROR: the board reports '$board', which is not $MCU." >&2
         echo "       Device ID $id is compatible but ambiguous (H747/H753):" >&2
@@ -204,6 +211,13 @@ check_tty_free() {
 check_board || exit 1
 resolve_tty || exit 1
 check_tty_free || exit 1
+
+# The PC peers (HTTP server of ex40, MQTT broker of ex42/ex77, the ex32 bounce...)
+# log to /tmp/caos-bench-*. With fs.protected_regular (the Ubuntu default) not
+# even root may reopen for writing a /tmp file owned by another user: logs left
+# by a run as a normal user stopped those peers with 'Permission denied' and
+# their classes failed. They are logs only: start from none.
+rm -f /tmp/caos-bench-* 2>/dev/null
 
 echo "run_test: MCU=${MCU:-?} [$MCU_SRC]${BOARD_SEEN:+ (${BOARD_SEEN})}  console=${CAOS_TTY:-/dev/ttyACM0}  FREE"
 

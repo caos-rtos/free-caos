@@ -6,7 +6,9 @@
 /**
  ******************************************************************************
  * @file    mqtt_service.h
- * @brief   caOS MQTT client service — v3.1.1, QoS 0, non-blocking
+ * @brief   caOS MQTT client service — v3.1.1, non-blocking. Publishes and
+ *          subscribes with QoS 0; a QoS 1 PUBLISH from the broker is delivered
+ *          and acknowledged (PUBACK), QoS 2 closes the connection.
  *
  * @note    Architecture:
  *
@@ -108,7 +110,8 @@ bool ca_mqtt_publish(const char *topic, const u8 *payload, u16 len);
 
 /**
  * Subscribe to a topic (QoS 0).
- * Returns false if not MQTT-connected.
+ * Returns false if not MQTT-connected, or if MQTT_SUB_PENDING_MAX (4)
+ * subscriptions are still waiting for their SUBACK.
  *
  * @param topic  null-terminated topic string (wildcards + and # supported)
  */

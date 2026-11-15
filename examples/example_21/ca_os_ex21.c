@@ -73,6 +73,29 @@
 #define WIRE_1           "PE8 CN10-18 (master TX) ---- PD6 CN9-4  (slave RX)"
 #define WIRE_2           "PD5 CN9-6   (slave TX)  ---- PE7 CN10-20 (master RX)"
 
+#elif MCU_ID == 773
+/* NUCLEO-H7S3L8 (MB1737) — VCP/CLI on USART3 (PD8/PD9, UM3276 7.9). UART7 is
+ * PE8/PE7 = D42/D41 on CN10 pins 18/20 and USART2 is PD5/PD6 = USART_B_TX/RX
+ * on CN9 pins 6/4 (UM3276 Tables 13-14): the same positions as the H753.
+ * AFs: PE8/PE7 AF7, PD5/PD6 AF7 (CubeMX GPIO database), as in uart_h7rsxx.c.
+ * LEDs UM3276 7.5: LD1 green PD10, LD2 yellow PD13, LD3 red PB7. */
+#define UART_MASTER      7U
+#define UART_SLAVE       2U
+#define UART_MASTER_ALT  0U
+#define UART_SLAVE_ALT   0U
+#define MASTER_PINS      "UART7  TX:PE8 CN10-18  RX:PE7 CN10-20"
+#define SLAVE_PINS       "USART2 TX:PD5 CN9-6    RX:PD6 CN9-4"
+#define M_TX_PORT CA_GPIO_PORT_E
+#define M_TX_PIN  CA_GPIO_PIN_8
+#define M_RX_PORT CA_GPIO_PORT_E
+#define M_RX_PIN  CA_GPIO_PIN_7
+#define S_TX_PORT CA_GPIO_PORT_D
+#define S_TX_PIN  CA_GPIO_PIN_5
+#define S_RX_PORT CA_GPIO_PORT_D
+#define S_RX_PIN  CA_GPIO_PIN_6
+#define WIRE_1           "PE8 CN10-18 (master TX) ---- PD6 CN9-4  (slave RX)"
+#define WIRE_2           "PD5 CN9-6   (slave TX)  ---- PE7 CN10-20 (master RX)"
+
 #elif MCU_ID == 575
 /* NUCLEO-U575ZI-Q (MB1549) — no UART7 on this part (LPUART1 + USART1-3 + UART4-5).
  *   USART1 PA9/PA10 -> STLINK-V3E VCP, i.e. our debug console (UART_DBG_NUM=1)
@@ -128,7 +151,8 @@
 #define WIRE_1           "PC6 CN7-1  (master TX) ---- PD6 CN9-4  (slave RX)"
 #define WIRE_2           "PD5 CN9-6  (slave TX)  ---- PC7 CN7-11 (master RX)"
 
-#elif MCU_ID == 446
+#elif MCU_ID == 446 || MCU_ID == 439
+/* F439ZI: same board, pins (UM1974 Table 17) and AFs (DS9484 Table 12). */
 /* NUCLEO-F446ZE (MB1137), pins verified against UM1974 Table 18. VCP/CLI is
  * USART3 (PD8/PD9), so USART6 and USART2 are free - but NOT on the pins the
  * F4 driver programs for USART2 (PA2/PA3): those two do not appear in Table 18

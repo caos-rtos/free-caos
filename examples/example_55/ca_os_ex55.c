@@ -41,12 +41,16 @@
 #define USB_NUM      1U    /* OTG_FS CN14 without ULPI — change to 0 if ULPI is available */
 #define EP_BULK_MPS  64U   /* 64 for OTG_FS, 512 for OTG_HS ULPI */
 
-#elif MCU_ID == 407 || MCU_ID == 446 || MCU_ID == 767
+#elif MCU_ID == 407 || MCU_ID == 439 || MCU_ID == 446 || MCU_ID == 767
 #define USB_NUM      0U
 #define EP_BULK_MPS  64U
 
 #elif MCU_ID == 563
 #define USB_NUM      0U          /* USB_DRD_FS — single instance H563 */
+#define EP_BULK_MPS  64U
+
+#elif MCU_ID == 773
+#define USB_NUM      0U          /* OTG_HS, integrated HS PHY run at FS (Type-C CN2) */
 #define EP_BULK_MPS  64U
 
 #else
@@ -66,7 +70,6 @@ static const ca_ipv4_t s_ip  = { .v = { 192U, 168U, 10U, 55U } };
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .v = { 192U, 168U, 10U, 55U } },
     .mac  = { .v = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x55U } },
-    .arp  = { .renew_ms = 30000U, .cache_size = 0U },
     .udp  = { .bindings = {{0}}, .count = 0U },
     .icmp = { .echo_reply = true },
 };

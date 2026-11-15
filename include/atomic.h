@@ -27,6 +27,36 @@
 #include "common.h"
 #include "safeguard.h"
 
+/* ============================================================================
+ * EXCLUSIVE ACCESS (LDREX/STREX) - CMSIS intrinsics in the ca_ namespace
+ * ========================================================================== */
+
+/**
+ * @brief Loads a word and marks it for exclusive access
+ * @param addr Word to read
+ * @return Current value of *addr
+ */
+static inline u32 ca_ldrex(volatile u32 *addr) {
+    return __LDREXW(addr);
+}
+
+/**
+ * @brief Stores a word if the exclusive mark set by ca_ldrex() still holds
+ * @param addr  Word to write (same address passed to ca_ldrex())
+ * @param value Value to store
+ * @return 0 if stored, 1 if the mark was lost (preemption, other store): retry
+ */
+static inline u32 ca_strex(volatile u32 *addr, u32 value) {
+    return __STREXW(value, addr);
+}
+
+/**
+ * @brief Drops the exclusive mark (ca_ldrex() not followed by ca_strex())
+ */
+static inline void ca_clrex(void) {
+    __CLREX();
+}
+
 
 /* ============================================================================
  * SPINLOCK TYPES

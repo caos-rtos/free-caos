@@ -70,11 +70,20 @@
    during the call (copy if needed). */
 typedef void (*ca_usb_ncm_rx_cb_t)(const u8 *eth, u16 len);
 
+/* Callback, ZERO COPY: the NTB was read straight into a net pool buffer and
+   carried one datagram; data_off/data_len of buf_idx now frame it (at least
+   NET_BUF_HEADROOM bytes in front). The buffer is the callee's: it must free
+   or hand it on. Called from the USB interrupt. Optional: when NULL, or when an
+   NTB carries more than one datagram, every datagram goes to on_rx (copied).
+   Only with EN_NET (the pool). */
+typedef void (*ca_usb_ncm_rx_buf_cb_t)(u16 buf_idx);
+
 typedef struct {
     ca_usb_device_type_t header;    /* tag + ops (D19) — first field */
     u16  mps;                        /* Bulk MPS (64 FS); 0 = 64 */
     u8   mac[6];                     /* MAC exposed to the host (iMACAddress) */
     ca_usb_ncm_rx_cb_t on_rx;        /* received Ethernet datagram */
+    ca_usb_ncm_rx_buf_cb_t on_rx_buf; /* same, zero copy in a net buffer (optional) */
 } __attribute__((aligned(4))) ca_usb_ncm_cfg_t;
 
 extern const ca_usb_class_ops_t ca_usb_ncm_ops;
@@ -83,6 +92,17 @@ extern const ca_usb_class_ops_t ca_usb_ncm_ops;
    with a single datagram. Returns false if link is not active (alt0) or error.
    eth: from DA (offset 0) for len bytes (max USB_NCM_MAX_FRAME). */
 bool ca_usb_ncm_send_frame(const u8 *eth, u16 len);
+
+#if EN_NET
+/* Sends the frame held in net buffer buf_idx (data_off/data_len), ZERO COPY
+   when it can: NTH16+NDP16 (28 B) are written into the headroom in front of
+   the frame and the whole NTB is queued by reference (ca_usb_ep_write_ref),
+   the buffer freed when the last packet has gone out. Falls back to
+   ca_usb_ncm_send_frame() (copy) when the driver has no reference path, the
+   buffer is shared (ca_net_buf_is_shared), the headroom is short or the frame
+   is not 4-aligned. Takes buf_idx in EVERY outcome, as the ETH drivers do. */
+bool ca_usb_ncm_send_buf(u16 buf_idx);
+#endif
 
 /* true if the host has selected alt1 on the data interface (link active). */
 bool ca_usb_ncm_is_up(void);

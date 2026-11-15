@@ -10,7 +10,7 @@
  * @note    HW implementation: hw/<family>/drivers/qspi_<family>.c
  *
  *  Present on: F446/F7xx/H7xx (QUADSPI), H5xx/U5xx (OCTOSPI)
- *  Absent on:  F1xx, F407/F429 — functions return false
+ *  Absent on:  F1xx, F407/F439 — functions return false
  *
  *  Pins (pinmap 0): the Zio CN10 QSPI positions, the same on every
  *  Nucleo-144 - 13 NCS, 15 CLK, 23 IO0, 21 IO1, 25 IO2, 19 IO3. The MCU

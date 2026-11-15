@@ -17,10 +17,24 @@ These are compiled out of the FREE libraries; their APIs are not even present in
 - **Filter math accelerator** (`EN_FMAC`) — FIR/IIR filters computed by the FMAC unit of the
   H563 and U575 (`ca_fmac_*`). The CORDIC coprocessor (`cordic.h`) **is** included.
 
-Everything else the five boards offer is on: UART, SPI, I2C, SAI (I2S audio), SPDIFRX, DMA2D, JPEG, ADC, DAC, DMA, timers, RTC,
-flash, QSPI, SDIO, the full TCP/IP stack and its services (DHCP, DNS, mDNS, NTP, SNTP,
-TFTP, HTTP, MQTT, Modbus, iperf, SSH), the crypto (AES, SHA, X25519, Ed25519, keystore),
-USB Full-Speed, FatFs, and the CLI.
+## Built without, although the headers are present
+
+These modules exist in caOS and their headers are in `include/`, but the FREE libraries are
+built with them switched off: a call to them does not link.
+
+- **HTTPS server and TLS 1.3** (`EN_HTTPS_SERVICE`, `EN_TLS`: `https_service.h`, `tls.h`).
+  Plain HTTP is included; example 45 serves HTTP only on the FREE edition.
+- **ECDSA P-256** (`EN_ECDSA_P256`: `ecdsa_p256.h`), the signature the TLS certificate uses.
+  Ed25519 and X25519 are included.
+
+## Everything else is on
+
+Everything else the seven boards offer is on: UART, LPUART, SPI, I2C, SAI (I2S audio), SPDIFRX,
+DMA2D, JPEG, ADC, DAC, DMA, timers, LPTIM, RTC, power modes, flash, QSPI, SDIO, the full
+TCP/IP stack and its services (DHCP, DNS, mDNS, NTP, syslog, TFTP, HTTP, MQTT, Modbus, iperf,
+SSH, IP fragmentation, packet tracer) over Ethernet and over USB-NCM, the crypto (AES, SHA,
+HMAC/HKDF/PBKDF2, X25519, Ed25519, keystore, secure pipe), USB Full-Speed (CDC, MSC, NCM,
+DFU, custom), FatFs, the bootloader support and the CLI.
 
 ## Resource cap
 
@@ -45,12 +59,12 @@ Neither affects a program you build and run normally on a supported board.
 
 `include/os_config.h` is the configuration the libraries were compiled with. It is fixed:
 changing it does not change the precompiled libraries, and a value that disagrees with them
-can break the build. Driver drivers you enable there that the library does not carry (CAN,
+can break the build. Drivers you enable there that the library does not carry (CAN,
 USB HS, tamper, FMAC) will not link.
 
 ## Not a limit, but good to know
 
-- Supported boards: NUCLEO-F446ZE, -F767ZI, -H563ZI, -H753ZI, -U575ZI-Q.
+- Supported boards: NUCLEO-F439ZI, -F446ZE, -F767ZI, -H563ZI, -H753ZI, -H7S3L8, -U575ZI-Q.
 - Release build only (no debug build is shipped).
 - The kernel sources are not part of this package.
 

@@ -88,6 +88,8 @@
 #   bench_net.sh eth  bounce [seconds]   carrier away and back, bench untouched
 #   bench_net.sh txq  one|restore|status [iface]   single TX queue (see ex85)
 #   bench_net.sh status      [subnet]    exit 0 when the link is fully up
+#   bench_net.sh tap  up|down|status     TAP caos-tap0 for a Renode board
+#                                        (simu/run.sh -e): .1 + DHCP on it
 #
 # Run it with sudo: both steps need root (the address, and port 67).
 
@@ -116,8 +118,60 @@ need_root() {
 # cable in it (carrier 1), already holding an address in the board's /24. The
 # board itself has no address yet - that is what the DHCP server is for - so it
 # is never asked to answer.
-detect_iface() {
-    local pfx="$1" i n first_wired="" first_no_default=""
+#
+# The board's cable is point to point, so the machine's uplink is NEVER it, and
+# the uplink is told apart by its gateway: where the default route goes out, or
+# - when there is no default route - where the gateway answers ARP. Seen
+# 2026-11-09: the house LAN (enp6s0) was disconnected from the desktop just
+# before an F767 round, the default route went with it, the old "not the
+# default route" fallback had nothing left to exclude and put 192.168.10.1 and
+# the DHCP server on the house LAN. Every ETH class after that failed.
+GWFILE=/var/lib/caos-bench/uplink_gw   # last WIRED gateway: survives the route
+
+default_dev() {
+    ip -4 route show default 2>/dev/null \
+        | awk '{for(i=1;i<NF;i++) if($i=="dev"){print $(i+1); exit}}'
+}
+
+# The gateways worth probing, one per line: the last one seen behind a WIRED
+# default route (remembered - a wifi on another network must not overwrite
+# it), then the current default route's, if different. Returns 1 if none.
+uplink_gws() {
+    local gw old="" dev n
+    gw=$(ip -4 route show default 2>/dev/null | awk '/ via /{print $3; exit}')
+    case "$gw" in *[!0-9.]*) gw="" ;; esac
+    dev=$(default_dev)
+    if [ -n "$gw" ] && [ "$(id -u)" = 0 ]; then
+        for n in $(wired_ifaces); do
+            [ "$n" = "$dev" ] || continue
+            mkdir -p "$(dirname "$GWFILE")" 2>/dev/null \
+                && echo "$gw" > "$GWFILE" 2>/dev/null
+        done
+    fi
+    [ -s "$GWFILE" ] && old=$(head -1 "$GWFILE")
+    case "$old" in *[!0-9.]*) old="" ;; esac
+    [ -n "$old$gw" ] || return 1
+    [ -n "$old" ] && echo "$old"
+    [ -n "$gw" ] && [ "$gw" != "$old" ] && echo "$gw"
+    return 0
+}
+
+# 0 = the gateway answers ARP on $1 (it is the uplink), 1 = it does not,
+# 2 = cannot tell (not root, no arping, no carrier).
+gw_answers() {
+    local n="$1" gw="$2" src=""
+    [ "$(id -u)" = 0 ] || return 2
+    command -v arping >/dev/null 2>&1 || return 2
+    [ "$(cat "/sys/class/net/$n/carrier" 2>/dev/null)" = 1 ] || return 2
+    # No address yet: ask from 0.0.0.0 (an RFC 5227 probe still gets a reply).
+    ip -o -4 addr show dev "$n" 2>/dev/null | grep -q ' inet ' || src="-0"
+    arping -q $src -i "$n" -C 1 -c 3 -w 2 "$gw" >/dev/null 2>&1 && return 0
+    return 1
+}
+
+# Wired, physical, not USB (the NCM board's own NIC), not wireless.
+wired_ifaces() {
+    local i n
     for i in /sys/class/net/*; do
         n=$(basename "$i")
         [ "$n" = lo ] && continue
@@ -132,42 +186,66 @@ detect_iface() {
             */usb[0-9]*/*) continue ;;
         esac
         case "$n" in wl*) continue ;; esac      # nor wireless
+        echo "$n"
+    done
+}
 
+# Prints the uplink among the wired interfaces, if it can be told; returns 1
+# when it cannot. With a default route that is free; without one, an ARP probe.
+detect_uplink() {
+    local n gw def
+    def=$(default_dev)
+    if [ -n "$def" ]; then
+        for n in $(wired_ifaces); do
+            [ "$n" = "$def" ] && { echo "$n"; return 0; }
+        done
+        # Default route via wifi/VPN: the wired uplink may still be plugged in
+        # (house LAN disconnected from the desktop, wifi on) - and the router
+        # is usually the same one, so it answers on that cable. Probe.
+    fi
+    for gw in $(uplink_gws); do
+        for n in $(wired_ifaces); do
+            gw_answers "$n" "$gw" && { echo "$n"; return 0; }
+        done
+    done
+    return 1
+}
+
+detect_iface() {
+    local pfx="$1" n uplink count=0 first="" known=1
+    for n in $(wired_ifaces); do count=$((count + 1)); done
+    # One wired port: it is the bench, nothing to tell apart.
+    uplink=""
+    if [ "$count" -gt 1 ]; then
+        uplink=$(detect_uplink) || known=0
+    fi
+
+    for n in $(wired_ifaces); do
+        [ "$n" = "$uplink" ] && continue        # never the uplink, even if it
+                                                # still holds a 192.168.10.x
         # The fallback candidate is remembered BEFORE the carrier test, and on
         # purpose. `up` is often run moments after `eth up`, while the PHY is
         # still autonegotiating: requiring a carrier there made it answer "no
         # interface found on 192.168.10.0/24" about an interface that was
         # sitting right in front of it, and the ETH class that followed an NCM
         # one aborted with no DHCP server at all.
-        [ -n "$first_wired" ] || first_wired="$n"
-
-        # On a machine with only one wired port this is the same interface as
-        # above and changes nothing. On one with more than one - a second
-        # onboard port, a dock - the plain "first one seen" guess is a coin
-        # flip between the board's cable and the machine's normal uplink, and
-        # alphabetical sysfs order has no reason to favor the board. An
-        # interface carrying this machine's default route IS that uplink, by
-        # definition: a point-to-point cable to a NUCLEO never is one. Seen
-        # 2026-09-08: enp6s0 (the house LAN, default route) beat enp7s0 (the
-        # board) this way, and 192.168.10.0/24 ended up routed into the wrong
-        # room.
-        if [ -z "$first_no_default" ] \
-           && ! ip route show default 2>/dev/null | grep -q "dev $n\b"; then
-            first_no_default="$n"
-        fi
-
-        [ "$(cat "$i/carrier" 2>/dev/null)" = 1 ] || continue
+        [ -n "$first" ] || first="$n"
+        [ "$(cat "/sys/class/net/$n/carrier" 2>/dev/null)" = 1 ] || continue
         if ip -o -4 addr show dev "$n" 2>/dev/null | grep -q " $pfx\."; then
             echo "$n"; return 0                 # already on the bench subnet
         fi
     done
-    # None on the subnet: fall back to a wired interface. Being on the subnet
-    # is how the bench USUALLY finds its interface, but it cannot be a
-    # requirement here - `up` exists precisely to put the address back on an
-    # interface that has lost it. Prefer one that is not the machine's default
-    # route; only guess blindly if every wired candidate carries one.
-    [ -n "$first_no_default" ] && { echo "$first_no_default"; return 0; }
-    [ -n "$first_wired" ] && { echo "$first_wired"; return 0; }
+    # None on the subnet: fall back to the wired interface that is not the
+    # uplink. With several ports and no way to tell which one is the uplink
+    # (no default route, no gateway remembered, no ARP answer) do NOT guess:
+    # a wrong guess puts the bench address and a DHCP server on the house LAN.
+    if [ "$count" -gt 1 ] && [ "$known" = 0 ]; then
+        echo "bench_net: $count wired interfaces and no way to tell the uplink" \
+             "(no default route, gateway silent or unknown) - not guessing." \
+             "Bring the uplink back, or give the bench port $pfx.1/24 by hand" >&2
+        return 1
+    fi
+    [ -n "$first" ] && { echo "$first"; return 0; }
     return 1
 }
 
@@ -1129,6 +1207,150 @@ capstop)
     fi
     ;;
 
+alias)
+    # ex44: a host outside the board's subnet (192.168.20.1) and a second
+    # gateway (192.168.10.254), both answered by this PC, so the next hop of an
+    # open TCP connection can really change. Reachable through the NOPASSWD
+    # rule, so the addresses are fixed here and nothing is taken from the caller.
+    need_root
+    iface=$(resolve_iface "" "$SUBNET_DEFAULT") || exit 1
+    case "${2:-}" in
+        up)
+            ip addr replace 192.168.20.1/32 dev "$iface" || exit 1
+            ip addr replace 192.168.10.254/32 dev "$iface" || exit 1
+            say "alias up on $iface"
+            ;;
+        down)
+            ip addr del 192.168.20.1/32 dev "$iface" 2>/dev/null || true
+            ip addr del 192.168.10.254/32 dev "$iface" 2>/dev/null || true
+            say "alias down on $iface"
+            ;;
+        *) die "usage: $(basename "$0") alias up|down" ;;
+    esac
+    ;;
+
+inject)
+    # Malformed-frame storm against a board (simu/net/inject.py): Renode on the
+    # TAP when it holds the bench address, else the real board on the bench port.
+    # Only to the bench subnet, only from those two interfaces, and only that
+    # script: root runs nothing the caller chose.
+    need_root
+    ip="${2:-}"; count="${3:-2000}"; seed="${4:-1}"
+    case "$ip" in "$SUBNET_DEFAULT".*) ;; *) die "usage: inject <$SUBNET_DEFAULT.x> [count] [seed]" ;; esac
+    case "${ip#"$SUBNET_DEFAULT".}" in ''|*[!0-9]*) die "bad address: $ip" ;; esac
+    case "$count" in ''|*[!0-9]*) die "count must be a number" ;; esac
+    case "$seed"  in ''|*[!0-9]*) die "seed must be a number" ;; esac
+    [ "$count" -le 100000 ] || die "count above 100000"
+    TAP=caos-tap0
+    renode=""
+    if ip -o -4 addr show dev "$TAP" 2>/dev/null | grep -q " $SUBNET_DEFAULT\.$PEER_HOST/"; then
+        iface="$TAP"
+        # Renode decodes every TAP frame with PacketDotNet, and a frame it
+        # cannot parse throws in its receive thread - SIGABRT of the whole
+        # simulation (simu/CHANGES.md 31): pad, and leave those frames out.
+        renode=--renode
+    else
+        iface=$(detect_iface "$SUBNET_DEFAULT") || die "no bench interface"
+    fi
+    exec /usr/bin/python3 -I "$HERE/../simu/net/inject.py" \
+        --dst "$ip" --iface "$iface" --count "$count" --seed "$seed" $renode
+    ;;
+
+vlan-ping)
+    # ICMP echo to a board inside an 802.1Q tag (simu/net/vlan_ping.py): VID 0
+    # (priority tag) must be answered, a VLAN id must not. Same rules as
+    # inject: bench subnet only, bench port only, that script only.
+    need_root
+    ip="${2:-}"; vid="${3:-}"; count="${4:-5}"
+    case "$ip" in "$SUBNET_DEFAULT".*) ;; *) die "usage: vlan-ping <$SUBNET_DEFAULT.x> <vid 0..4094> [count]" ;; esac
+    case "${ip#"$SUBNET_DEFAULT".}" in ''|*[!0-9]*) die "bad address: $ip" ;; esac
+    case "$vid"   in ''|*[!0-9]*) die "vid must be a number" ;; esac
+    case "$count" in ''|*[!0-9]*) die "count must be a number" ;; esac
+    [ "$vid" -le 4094 ] || die "vid above 4094"
+    [ "$count" -ge 1 ] && [ "$count" -le 50 ] || die "count must be 1..50"
+    iface=$(detect_iface "$SUBNET_DEFAULT") || die "no bench interface"
+    exec /usr/bin/python3 -I "$HERE/../simu/net/vlan_ping.py" \
+        --dst "$ip" --iface "$iface" --vid "$vid" --count "$count"
+    ;;
+
+uplink)
+    # Diagnostic: how detect_iface() tells the uplink from the bench port. The
+    # ARP probe runs only as root, so run it through sudo like the rest.
+    def=$(default_dev)
+    gws=$(uplink_gws | tr '\n' ' ') || gws=""
+    say "default route : ${def:-none}"
+    say "remembered gw : $(head -1 "$GWFILE" 2>/dev/null || echo none)"
+    for gw in $gws; do
+        for n in $(wired_ifaces); do
+            gw_answers "$n" "$gw"
+            case $? in 0) a="answers" ;; 1) a="silent" ;; *) a="cannot probe" ;; esac
+            say "  $n  carrier=$(cat /sys/class/net/$n/carrier 2>/dev/null)  $gw: $a"
+        done
+    done
+    up=$(detect_uplink) || up="unknown"
+    say "uplink        : $up"
+    b=$(detect_iface "$SUBNET_DEFAULT") || b="NONE (refused to guess)"
+    say "bench port    : $b"
+    ;;
+
+inet)
+    # 'ping test', 'dns test', 'ntp test': the board reaches the Internet through
+    # this PC. Up only for the phases that need it, and narrow: ICMP echo and NTP,
+    # no private destination (the home LAN stays out of reach of the board). DNS
+    # is not forwarded: the board asks the resolver on this PC (peer 37).
+    need_root
+    iface=$(resolve_iface "" "$SUBNET_DEFAULT") || exit 1
+    wan=$(ip -4 route show default | awk '{print $5; exit}')
+    inet_down() {
+        iptables -D FORWARD -j CAOS_INET 2>/dev/null || true
+        iptables -F CAOS_INET 2>/dev/null || true
+        iptables -X CAOS_INET 2>/dev/null || true
+        iptables -t nat -D POSTROUTING -j CAOS_INET_NAT 2>/dev/null || true
+        iptables -t nat -F CAOS_INET_NAT 2>/dev/null || true
+        iptables -t nat -X CAOS_INET_NAT 2>/dev/null || true
+        if [ -s "$STATEDIR/ip_forward.saved" ]; then
+            sysctl -q -w net.ipv4.ip_forward="$(cat "$STATEDIR/ip_forward.saved")"
+            rm -f "$STATEDIR/ip_forward.saved"
+        fi
+    }
+    case "${2:-}" in
+        up)
+            [ -n "$wan" ] || die "no default route: this PC has no way out"
+            [ "$wan" != "$iface" ] || die "the default route is on the bench link ($iface)"
+            inet_down
+            mkdir -p "$STATEDIR"
+            cat /proc/sys/net/ipv4/ip_forward > "$STATEDIR/ip_forward.saved"
+            iptables -N CAOS_INET || exit 1
+            iptables -A CAOS_INET -i "$wan" -o "$iface" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+            for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do
+                iptables -A CAOS_INET -i "$iface" -d "$net" -j DROP
+            done
+            iptables -A CAOS_INET -i "$iface" -o "$wan" -p icmp --icmp-type echo-request -j ACCEPT
+            iptables -A CAOS_INET -i "$iface" -o "$wan" -p udp --dport 123 -j ACCEPT
+            iptables -A CAOS_INET -i "$iface" -j DROP
+            iptables -I FORWARD 1 -j CAOS_INET || exit 1
+            iptables -t nat -N CAOS_INET_NAT || exit 1
+            iptables -t nat -A CAOS_INET_NAT -s "$SUBNET_DEFAULT.0/24" -o "$wan" -j MASQUERADE
+            iptables -t nat -I POSTROUTING 1 -j CAOS_INET_NAT || exit 1
+            sysctl -q -w net.ipv4.ip_forward=1
+            say "inet up: $iface -> $wan (ICMP echo, NTP)"
+            ;;
+        down)
+            inet_down
+            say "inet down"
+            ;;
+        status)
+            if iptables -S CAOS_INET >/dev/null 2>&1; then
+                say "inet up, ip_forward=$(cat /proc/sys/net/ipv4/ip_forward)"
+            else
+                say "inet down, ip_forward=$(cat /proc/sys/net/ipv4/ip_forward)"
+                exit 1
+            fi
+            ;;
+        *) die "usage: $(basename "$0") inet up|down|status" ;;
+    esac
+    ;;
+
 echo84)
     # example_84's raw L2 echo generator.
     #
@@ -1648,6 +1870,41 @@ usb-restore)
     fi
     ;;
 
+tap)
+    # The PC side of a SIMULATED board (simu/run.sh -e): a persistent TAP owned
+    # by the user who ran sudo, so Renode opens it without root, then the same
+    # `up` as a wired board - .1 moves onto the TAP (off enp7s0 or any other
+    # interface: one interface on the subnet at a time) and dnsmasq follows it.
+    # Name fixed on purpose: sudo must not create or delete arbitrary links.
+    # Simulation and real bench share 192.168.10.0/24: run them at different
+    # times, `tap down` then `up` gives the subnet back to the wire.
+    TAP=caos-tap0
+    need_root
+    case "${2:-}" in
+    up)
+        owner="${SUDO_USER:-}"
+        [ -n "$owner" ] || die "run it through sudo: the TAP is created for the calling user"
+        if [ ! -e "/sys/class/net/$TAP" ]; then
+            ip tuntap add dev "$TAP" mode tap user "$owner" || die "cannot create $TAP"
+            say "$TAP created (persistent, owner $owner)"
+        fi
+        ip link set "$TAP" up || die "cannot bring $TAP up"
+        # No cable to tell a bench from an office LAN here: the TAP is ours.
+        BENCH_NET_FORCE=1 "$0" up "$TAP" "${3:-$SUBNET_DEFAULT}"
+        ;;
+    down)
+        "$0" down "" "${3:-$SUBNET_DEFAULT}"
+        if [ -e "/sys/class/net/$TAP" ]; then
+            ip link del "$TAP" && say "$TAP removed"
+        fi
+        ;;
+    status)
+        ip -br addr show dev "$TAP" 2>/dev/null || { echo "$TAP: not present"; exit 1; }
+        ;;
+    *) die "usage: bench_net.sh tap up|down|status [subnet]" ;;
+    esac
+    ;;
+
 down)
     subnet="${3:-$SUBNET_DEFAULT}"
     check_subnet "$subnet"
@@ -1795,6 +2052,14 @@ txq)
   tcpdump <ipv4> [count] [iface]  capture on that link (max 200 packets)
   capture <ipv4> [iface]  start a .pcap capture (fixed path, ends with capstop)
   capstop                 stop it and hand the file to the calling user
+  alias up|down           ex44 next-hop test: 192.168.20.1 and 192.168.10.254 on the PC
+  inet up|down|status     board -> Internet through this PC: NAT, ICMP echo and NTP only
+  uplink                  how the bench port is told from the uplink (gateway probe)
+  inject <ip> [n] [seed]  malformed-frame storm (simu/net/inject.py) to a board on
+                          the TAP (Renode) or on the bench port
+  vlan-ping <ip> <vid> [n]  ICMP echo inside an 802.1Q tag (simu/net/vlan_ping.py):
+                          prints "vid= sent= replies= tagged_replies=" - VID 0 must
+                          be answered, a VLAN id must not
   echo84 <iface> [count] [size] [mbps]
                                  ex84: raw L2 echo generator (needs raw sockets).
                                  mbps 0 = unpaced; a rate paces the sender, to

@@ -69,7 +69,7 @@
   #define BTN_PULL        CA_GPIO_NOPULL      /* external pulldown on board */
   #define BTN_PRESSED_LVL 1U
 #elif MCU_ID == 563 || MCU_ID == 753 || MCU_ID == 746 \
-   || MCU_ID == 429 || MCU_ID == 446 || MCU_ID == 767
+   || MCU_ID == 439 || MCU_ID == 446 || MCU_ID == 767
   /* NUCLEO-144: green LD1 = PB0 (TIM3_CH3 AF2), button B1 = PC13 */
   #define LED_PORT        CA_GPIO_PORT_B
   #define LED_PIN         CA_GPIO_PIN_0
@@ -81,6 +81,19 @@
   #define BTN_PIN         CA_GPIO_PIN_13
   #define BTN_PULL        CA_GPIO_NOPULL      /* external pulldown on board */
   #define BTN_PRESSED_LVL 1U
+#elif MCU_ID == 773
+  /* NUCLEO-H7S3L8 (UM3276 7.5/7.6): yellow LD2 = PD13 (TIM4_CH2 AF2, DS14359),
+   * button B2 = PC13 active LOW with NO external pull-up on the board */
+  #define LED_PORT        CA_GPIO_PORT_D
+  #define LED_PIN         CA_GPIO_PIN_13
+  #define LED_AF          2U
+  #define LED_ACTIVE_LOW  0
+  #define PWM_TIM         4U
+  #define PWM_CH          2U
+  #define BTN_PORT        CA_GPIO_PORT_C
+  #define BTN_PIN         CA_GPIO_PIN_13
+  #define BTN_PULL        CA_GPIO_PULLUP
+  #define BTN_PRESSED_LVL 0U
 #else
   /* No LED/button mapping for this board: the example does not apply. */
   #undef  EX60_OK

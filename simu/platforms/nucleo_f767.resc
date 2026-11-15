@@ -1,0 +1,8 @@
+# Factory calibration (12-bit ADC) reads 0 in Renode: see nucleo_h753.resc.
+sysbus WriteWord 0x1FF0F44C 1520   # TS_CAL1 (30 C)
+sysbus WriteWord 0x1FF0F44E 1790   # TS_CAL2 (110 C)
+sysbus WriteWord 0x1FF0F44A 1500   # VREFINT_CAL
+# Reset vector: the F7 boots from BOOT_ADD0 = 0x0080 (flash on AXIM, 0x08000000);
+# at 0x00000000 the model has the empty ITCM. LoadELF sets SP/PC for the first boot
+# only: without this, every software reset (NVIC_SystemReset) fetched SP=0/PC=0.
+cpu InitVectorTableOffset 0x08000000

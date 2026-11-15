@@ -64,43 +64,49 @@ sender ca_stdout_get_sender(void);
 
 /**
  * @brief Sends formatted message to stdout (from task)
+ * @details All the put/printf calls below slow the caller down as the queue
+ *          fills: no wait while more than 5 slots are free, a short sleep
+ *          (1..5 ms) on the last 5, and up to 1 s for a slot when it is full;
+ *          then the line is dropped and "stdout: warning queue is full!" is
+ *          printed once. Never waits from an ISR, with interrupts masked or
+ *          in the stdout drain thread.
  * @param fmt Format string (printf style)
- * @return Number of characters
+ * @return Number of characters, 0 if the line was dropped (queue full)
  */
 u16 ca_stdout_printf(const char *fmt, ...);
 
 /**
  * @brief Sends formatted message + \r\n to stdout (from task)
  * @param fmt Format string (printf style)
- * @return Number of characters
+ * @return Number of characters, 0 if the line was dropped (queue full)
  */
 u16 ca_stdout_printf_n(const char *fmt, ...);
 
 /**
  * @brief Sends raw string to stdout (from task)
  * @param msg C string
- * @return Number of characters
+ * @return Number of characters, 0 if the line was dropped (queue full)
  */
 u16 ca_stdout_put(const char *msg);
 
 /**
  * @brief Sends raw string + \r\n to stdout (from task)
  * @param msg C string
- * @return Number of characters
+ * @return Number of characters, 0 if the line was dropped (queue full)
  */
 u16 ca_stdout_put_n(const char *msg);
 
 /**
  * @brief Sends p_str to stdout (from task)
  * @param str p_str
- * @return Number of characters
+ * @return Number of characters, 0 if the line was dropped (queue full)
  */
 u16 ca_stdout_put_str(p_str str);
 
 /**
  * @brief Sends p_str + \r\n to stdout (from task)
  * @param str p_str
- * @return Number of characters
+ * @return Number of characters, 0 if the line was dropped (queue full)
  */
 u16 ca_stdout_put_str_n(p_str str);
 

@@ -51,11 +51,14 @@
 #elif MCU_ID == 753
 #define USB_NUM      1U    /* OTG_FS CN14 without ULPI — change to 0 if ULPI is available */
 
-#elif MCU_ID == 407 || MCU_ID == 446 || MCU_ID == 767
+#elif MCU_ID == 407 || MCU_ID == 439 || MCU_ID == 446 || MCU_ID == 767
 #define USB_NUM      0U
 
 #elif MCU_ID == 563
 #define USB_NUM      0U          /* USB_DRD_FS — single instance H563 */
+
+#elif MCU_ID == 773
+#define USB_NUM      0U          /* OTG_HS, integrated HS PHY run at FS (Type-C CN2) */
 
 #else
 /* example not supported by hardware */
@@ -144,7 +147,6 @@ static const ca_udp_server_cfg_t srv_cfg = {
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .v = { 192U, 168U, 10U, 69U } },
     .mac  = { .v = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x69U } },
-    .arp  = { .renew_ms = 30000U },
     .udp  = { .bindings = { {0U, NULL} }, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -195,8 +197,9 @@ static u32 task_net(void *arg)
     return 0U;
 }
 
-/* No "eth stats"/"eth pool" here: that CLI lives inside #if EN_ETH in
+/* No "eth pool" here: that CLI lives inside #if EN_ETH in
  * caos/drivers/src/eth.c, so it is not built on NCM (EN_CLI_ETH is off).
+ * The net counters are in "ip stats" (caos/net, every iface).
  * Pool and net counters stay reachable through "net" (EN_CLI_NET) and the
  * "usbdbg" handler below. */
 

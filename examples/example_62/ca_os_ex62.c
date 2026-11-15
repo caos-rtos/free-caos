@@ -134,6 +134,16 @@
 #define EX62_NO_LPUART_HW  1
 #endif
 
+/* NUCLEO-H7S3L8: LPUART1 exists only on PA9/PA10 or PB6/PB7 (CubeMX GPIO
+ * database). PB6 is the ETH RMII_REF_CLK driven by the PHY (SB63 ON) and PB7
+ * the LD3 LED; PA9 reaches only morpho CN12-21, not soldered on this board
+ * (UM3276 8.2), and is the TCPP03 I2C SDA (SB35 ON). No adapter position on
+ * a stock board: declared unsupported (decision 02/11/2026). */
+#if MCU_ID == 773
+#define EX62_NO_LPUART_HW  1
+#define EX62_NO_BOARD_PINS 1
+#endif
+
 #if EN_LPUART && STDOUT_ON_LPUART && STDIN_ON_LPUART && EN_PWR && \
     !defined(EX62_NO_LPUART_HW)
 
@@ -198,7 +208,9 @@ void ca_os_main(void)
  * compile-time failure here stops EVERY example for that MCU. It builds and
  * says so at runtime instead. */
 PRIVATE_STRING(m62a, "=== Example 62 ===");
-#ifdef EX62_NO_LPUART_HW
+#if defined(EX62_NO_BOARD_PINS)
+PRIVATE_STRING(m62b, "NUCLEO-H7S3L8: LPUART1 pins not reachable (PB6 = ETH REF_CLK, PA9 morpho only)");
+#elif defined(EX62_NO_LPUART_HW)
 PRIVATE_STRING(m62b, "no LPUART on this part: example not supported");
 #else
 PRIVATE_STRING(m62b, "EN_LPUART / STDOUT_ON_LPUART / STDIN_ON_LPUART / EN_PWR disabled");

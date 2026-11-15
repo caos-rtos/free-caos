@@ -14,6 +14,7 @@ typedef struct {
     u32 bytes_total;
     u32 duration_ms;
     u32 bps;           /* bits per second */
+    u32 streams;       /* connections served (server: iperf -P N gives N) */
 } ca_iperf_result_t;
 
 /* Blocking utility functions — usable standalone without the service task */
@@ -21,6 +22,9 @@ bool ca_iperf_client(ca_ipv4_t remote_ip, u16 port,
                      ca_ipv4_t local_ip, ca_mac_t local_mac,
                      u32 duration_ms, ca_iperf_result_t *out);
 
+/* Serves every connection the peer opens (iperf -P N) until all of them have
+ * closed or none has carried data for idle_timeout_ms; false if the first
+ * one does not arrive within idle_timeout_ms. Up to IPERF_MAX_STREAMS. */
 bool ca_iperf_server(u16 port,
                      ca_ipv4_t local_ip, ca_mac_t local_mac,
                      u32 idle_timeout_ms, ca_iperf_result_t *out);

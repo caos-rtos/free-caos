@@ -39,6 +39,7 @@ import argparse
 import atexit
 import shutil
 import signal
+import sys
 import socket
 import struct
 import subprocess
@@ -93,6 +94,13 @@ def dhcp_stop(iface: str, pc_ip: str):
             pass
     else:
         _run(["pkill", "-f", "dnsmasq-caos-ex49"])
+    # The log too: a dnsmasq that outlived its script once grew its log to
+    # 4.2 GB and filled the root disk (ex44, 28/10)
+    for f in (DNSMASQ_CONF, DNSMASQ_LOG):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
     _run(["ip", "addr", "del", f"{pc_ip}/24", "dev", iface])
     print(f"[*] DHCP stopped, {iface} restored.")
 
@@ -120,7 +128,6 @@ def dhcp_start(iface: str, pc_ip: str):
             f"dhcp-option=option:router,{pc_ip}\n"
             "dhcp-option=option:dns-server,8.8.8.8\n"
             f"dhcp-option=option:netmask,{DHCP_MASK}\n"
-            "log-dhcp\n"
             "no-resolv\n"
             "no-hosts\n"
         )
@@ -332,6 +339,9 @@ def main():
             raise SystemExit("[!] --iface requires root (use sudo)")
         dhcp_start(args.iface, args.pc_ip)
         atexit.register(dhcp_stop, args.iface, args.pc_ip)
+        # SIGTERM/SIGHUP (kill, terminal closed) skip atexit: make them exits
+        for _s in (signal.SIGTERM, signal.SIGHUP):
+            signal.signal(_s, lambda n, f: sys.exit(128 + n))
 
     data = make_test_data(args.size)
     print(f"Generated {len(data)}B test pattern")

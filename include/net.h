@@ -77,6 +77,8 @@ typedef struct {
     u32 err_bus;          /* CA_ETH_ERR_BUS events */
     u32 err_rbu;          /* CA_ETH_ERR_RBU events */
     u32 process_calls;    /* how many times ca_net_process() was called */
+    u32 rx_dropped_vlan;  /* dropped: 802.1Q tag with a VLAN id (only the
+                             priority tag, VID 0, is taken - and stripped) */
 } ca_net_stats_t;
 
 /* ----------------------------------------------------------------------- */

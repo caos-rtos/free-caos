@@ -103,7 +103,8 @@
  * in the very pin list ex33..ex45 program, all of them green on this board. It
  * would have repeated the H753 story exactly: a jumper that passes continuity
  * and every transfer coming back wrong, because the PHY drives the line. */
-#if (MCU_ID == 563) || (MCU_ID == 753) || (MCU_ID == 747) || (MCU_ID == 767)
+#if (MCU_ID == 563) || (MCU_ID == 753) || (MCU_ID == 747) || (MCU_ID == 767) || (MCU_ID == 439) \
+ || (MCU_ID == 773)
 #define EX64_ALT_GPIO  true
 #else
 #define EX64_ALT_GPIO  false
@@ -132,6 +133,9 @@
  * table listing it. Use the morpho, as the header of this file says. */
 #if (MCU_ID == 563)
 #define EX64_WIRE_TXT   "PB5 (MOSI, CN12-29) ---- PB4 (MISO, CN12-27)"
+#elif (MCU_ID == 773)
+/* NUCLEO-H7S3L8, UM3276 Table 11: PB5 = D11 on CN7 pin 14, PB4 = D25 on CN7 pin 19 */
+#define EX64_WIRE_TXT   "PB5 (MOSI, CN7-14) ---- PB4 (MISO, CN7-19)"
 #else
 #define EX64_WIRE_TXT   "PB5 (MOSI, CN7-13) ---- PB4 (MISO, CN7-19)"
 #endif
@@ -406,11 +410,14 @@ static bool ex64_cli_handler(c_str *pcmd)
         return true;
     }
     if (ca_strncmp(p, "regs", 4) == 0) {
-        /* diagnostic dump of the block: SPI1 + the two GPDMA channels.
-         * ch0 = RX (0x40020050), ch1 = TX (0x400200D0). */
-        volatile u32 *spi = (volatile u32 *)0x40013000U;
-        volatile u32 *rx  = (volatile u32 *)0x40020050U;
-        volatile u32 *tx  = (volatile u32 *)0x400200D0U;
+        /* diagnostic dump of the block: SPI1 + the two GPDMA channels
+         * ch0 = RX, ch1 = TX. From the CMSIS names: the addresses differ per
+         * part (SPI1 0x40013000 on H5, 0x42003000 on H7S - a fixed one
+         * BusFaulted there). */
+#if defined(GPDMA1_Channel0)
+        volatile u32 *spi = (volatile u32 *)SPI1;
+        volatile u32 *rx  = (volatile u32 *)GPDMA1_Channel0;
+        volatile u32 *tx  = (volatile u32 *)GPDMA1_Channel1;
         u32 sr = spi[5];
         CLI_PRINTF_N("SPI  CR1=%08x CR2=%08x CFG1=%08x", spi[0], spi[1], spi[2]);
         CLI_PRINTF_N("     CFG2=%08x SR=%08x CTSIZE=%u", spi[3], sr, sr >> 16);
@@ -419,6 +426,9 @@ static bool ex64_cli_handler(c_str *pcmd)
                      rx[4], rx[5], rx[17], rx[18] & 0xFFFFU);
         CLI_PRINTF_N("TX   CSR=%08x CCR=%08x CTR2=%08x BNDT=%u",
                      tx[4], tx[5], tx[17], tx[18] & 0xFFFFU);
+#else
+        CLI_PUT_N("regs: GPDMA parts only (H5, U5, H7S)");
+#endif
         return true;
     }
     if (ca_strncmp(p, "buf", 3) == 0) {

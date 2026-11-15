@@ -80,5 +80,19 @@ void ca_wdt_on_early(ca_wdt_early_cb_t cb, void *arg);
 /* Whether this family can warn before the reset with that watchdog */
 bool ca_wdt_early_supported(ca_wdt_type_t type);
 
+/* Last gasp: at the early warning the kernel writes the name of the task that
+ * was running (the one the warning interrupted: usually the one that kept the
+ * CPU while the watchdog starved) into backup registers CA_WDT_BKP_GASP ..
+ * +3, which survive the reset. Needs the early warning (CA_WDT_MODE_INTERRUPT,
+ * ca_wdt_early_supported()) and 16 backup registers: false where either is
+ * missing (F1 has 10). A callback set with ca_wdt_on_early() still runs,
+ * after the record. The bootloader keeps 16-17, so 12-15 are taken here. */
+#define CA_WDT_BKP_GASP   12U
+bool ca_wdt_last_gasp_arm(void);
+/* At boot: the task named by the last gasp of the previous run, into name
+ * (NUL-terminated, "-" if no task was running), and the record is cleared.
+ * false if no last gasp was recorded. */
+bool ca_wdt_last_gasp(char *name, u32 size);
+
 
 #endif /* WDT_H */

@@ -144,10 +144,10 @@ u16 ca_put_n(sender out, c_str msg);
 
 /**
  * @brief Print CPU, stack, and memory statistics (top-style)
- * @note To be called periodically (e.g., every 5000 cycles)
+ * @note Sleeps window_ms to measure the CPU share over that window
  */
-static inline void ca_top(u16 mode) {
-    ca_scheduler_tasks_info((ca_scheduler_tasks_info_mode)(mode));
+static inline void ca_top(u16 mode, u32 window_ms) {
+    ca_scheduler_tasks_info((ca_scheduler_tasks_info_mode)(mode), window_ms);
 }
 
 /**

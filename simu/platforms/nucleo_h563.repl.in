@@ -1,0 +1,29 @@
+// NUCLEO-H563ZI (MB1404) on our own STM32H563 model (stm32h563_caos.repl.in).
+// Console: USART3 (UART_DBG_NUM=3, PD8/PD9 -> ST-LINK VCP).
+using "stm32h563_caos.repl"   // simu/gen_platforms.py
+
+// See nucleo_h753.repl: polled SysTick waits end in seconds.
+cpu:
+    PerformanceInMips: 20
+
+// Holes of the memory map: an access is a BusFault, as on silicon (busfault_hole.py).
+hole_null: Python.PythonPeripheral @ sysbus 0x00000000
+    size: 0x08000000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''
+
+hole_flash: Python.PythonPeripheral @ sysbus 0x08200000
+    size: 0x00DFF000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''
+
+hole_ram: Python.PythonPeripheral @ sysbus 0x200A0000
+    size: 0x0FF60000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''

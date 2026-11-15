@@ -6,28 +6,32 @@
 /**
  ******************************************************************************
  * @file    arp_service.h
- * @brief   caOS ARP cache + blocking resolve service
+ * @brief   caOS ARP cache with neighbour reachability (NUD) + resolve service
  *
- * @note    Architecture (VPP-inspired):
+ * @note    Entry states:
  *
- *            Application task (any priority)
- *              ca_arp_resolve(ip, mac_out, timeout_ms)
- *                ├─ cache hit  → return immediately (fast path)
- *                └─ cache miss → post s_request_sem (wake ARP task)
- *                                wait s_done_sem with timeout
+ *            REACHABLE --(ARP_ENTRY_TTL without confirmation)--> STALE
+ *            STALE     --(used for TX)--> PROBE: unicast ARP, ARP_RETRY_N
+ *                                         times, ARP_RETRY_MS apart
+ *            PROBE     --(ARP frame or confirmation)--> REACHABLE
+ *            PROBE     --(no answer)--> FAILED: entry cleared, the next
+ *                                       packet broadcasts again
  *
- *            ARP task (CA_TH_LEVEL0 — highest, blocked when idle)
- *              ca_sem_wait(&s_request_sem)
- *              for retry in ARP_RETRY_N:
- *                send ARP request frame
- *                ca_sem_timedwait(&reply_sem, ARP_RETRY_MS)
- *              post s_done_sem → wake caller
+ *          The MAC stays usable in STALE and PROBE. A confirmation is strict:
+ *          an ARP frame, a TCP ACK that advances snd_una, a DNS/NTP reply
+ *          matching one of our requests. Not just any frame from that MAC.
  *
- *            net task (CA_TH_LEVEL2) — processes received frames
- *              ca_net_proto_arp_handler() receives ARP frame:
- *                ca_arp_set(spa, sha)    → updates cache
- *                if s_pending.active && ip==pending.ip:
- *                  ca_sem_post(&reply_sem) → unblocks ARP task
+ *          Application task (any priority)
+ *            ca_arp_lookup()   never blocks: for every packet
+ *            ca_arp_resolve()  blocks only at first contact (no entry)
+ *
+ *          ARP task (CA_TH_LEVEL0 — highest, blocked when idle)
+ *            waits on its request queue until the next retry deadline, and
+ *            drives every broadcast resolution and unicast probe from there
+ *
+ *          net task (CA_TH_LEVEL2) — processes received frames
+ *            ca_arp_set(spa, sha)    ARP frames: entry REACHABLE
+ *            ca_arp_learn(ip, mac)   IP frames: creates a missing entry only
  *
  *          Initialization (from ca_os_configure, BEFORE ca_arp_service_start):
  *            ca_arp_service_init(local_mac, local_ip)
@@ -81,20 +85,39 @@ bool ca_arp_avail(ca_ipv4_t ip);
 bool ca_arp_find(ca_ipv4_t ip, ca_mac_t *mac_out);
 
 /**
+ * Non-blocking lookup for the TX path, lock-free. True + MAC for a REACHABLE,
+ * STALE or PROBE entry (a STALE one starts a unicast probe). False with no
+ * entry: a broadcast resolution starts in the background.
+ */
+bool ca_arp_lookup(ca_ipv4_t ip, ca_mac_t *mac_out);
+
+/**
+ * Upper-layer proof that ip is reachable: entry back to REACHABLE, nothing on
+ * the wire. Call only on strict evidence (see the file header).
+ */
+void ca_arp_confirm(ca_ipv4_t ip);
+
+/**
  * Blocking resolve: returns true + mac_out[6] on success, false on timeout.
- * Fast path (cache hit): returns immediately without waking the ARP task.
+ * Fast path (entry in cache, even STALE): returns immediately.
  * Slow path: sends ARP_RETRY_N requests spaced ARP_RETRY_MS ms apart.
  * timeout_ms should be >= ARP_RETRY_N * ARP_RETRY_MS.
  */
 bool ca_arp_resolve(ca_ipv4_t ip, ca_mac_t *mac_out, u32 timeout_ms);
 
 /**
- * Insert or update a cache entry.
+ * Insert or update a cache entry, REACHABLE.
  * Called by net_proto ARP handler for every ARP frame seen (request+reply).
  * Also callable from application (e.g. from DHCP ACK, manual config).
  * Automatically unblocks a pending ca_arp_resolve() if ip matches.
  */
 void ca_arp_set(ca_ipv4_t ip, ca_mac_t mac);
+
+/**
+ * Passive learning from a received IP frame: creates a missing entry, born
+ * STALE, and never refreshes an existing one (that would defeat the NUD).
+ */
+void ca_arp_learn(ca_ipv4_t ip, ca_mac_t mac);
 
 /**
  * Update only the local IP (after DHCP bind/renew) without reinitialising

@@ -47,6 +47,12 @@ stlink_pick() {
 
     local num
     num=$(printf '%s' "$mcu" | grep -oiP '^[a-z]\K[0-9]{3}' | head -1)
+    # caOS names that are not the part number the board declares:
+    # H773 = STM32H7S3 (NUCLEO-H7S3L8), H763 = STM32H7R3
+    case $num in
+        773) num="H7S3" ;;
+        763) num="H7R3" ;;
+    esac
 
     # One probe: still the board must be the one asked for. Without this an
     # H753 elf went into the only board connected, a U575 (25/10): the
@@ -57,7 +63,7 @@ stlink_pick() {
     if [ "$n" -eq 1 ]; then
         local board="${pairs#*|}"
         if [ -n "$num" ] && [ "$board" != "?" ] && \
-           printf '%s' "$board" | grep -qE '[0-9]{3}' && \
+           printf '%s' "$board" | grep -qE '[0-9]{3}|H7[RS][0-9]' && \
            ! printf '%s' "$board" | grep -q -- "$num"; then
             echo "ERROR: the only ST-LINK connected is on ${board}, not on ${mcu}." >&2
             echo "       Connect the ${mcu} board, or set CAOS_STLINK_SN=<serial> to force it." >&2

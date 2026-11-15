@@ -17,6 +17,8 @@ extern u16  ca_adc_hw_read(u8 adc_num, u8 channel);                        /* st
 extern bool ca_adc_hw_init_periph_isr(u8 adc_num, u8 sample_time, ca_adc_isr_cb_t cb); /* configures ADC in interrupt mode with callback */
 extern void ca_adc_hw_start_isr(u8 adc_num, u8 channel);                   /* starts asynchronous conversion — the result arrives via callback */
 extern void ca_adc_hw_irq_handler(u8 adc_num);                             /* ADC IRQ handler: reads the result and invokes the callback */
+extern bool ca_adc_hw_stop(u8 adc_num);                                    /* stops conversions and disables the ADC (clears ADEN) */
+extern bool ca_adc_hw_stop_isr(u8 adc_num);                                /* leaves the ADC on but disables its end-of-conversion interrupt */
 #endif
 
 /* ── AES ──────────────────────────────────────────────────────────────────── */
@@ -75,8 +77,6 @@ extern bool ca_dac_hw_stop(u8 channel);                                    /* di
 extern bool ca_dac_hw_comp_init(u8 dac_channel, u8 hyst);                  /* COMP1: PB2 against the DAC channel; false = no comparator */
 extern bool ca_dac_hw_comp_level(void);                                    /* COMP1 output */
 extern void ca_dac_hw_comp_stop(void);                                     /* COMP1 off */
-extern bool ca_adc_hw_stop(u8 adc_num);                                    /* stops conversions and disables the ADC (clears ADEN) */
-extern bool ca_adc_hw_stop_isr(u8 adc_num);                                /* leaves the ADC on but disables its end-of-conversion interrupt */
 #endif
 
 /* ── DMA ──────────────────────────────────────────────────────────────────── */
@@ -189,7 +189,7 @@ extern bool ca_pwr_hw_enter_stop(void);                                    /* di
 extern void ca_pwr_hw_enter_standby(void);                                 /* enters STANDBY; does not return (wake = reset) */
 extern void ca_pwr_hw_wake_pin_enable(void);                               /* enables the WKUP1 pin as a wake-up source */
 extern void ca_pwr_hw_stop_wake_nvic(u32 wake_flags);                      /* re-enables in the NVIC only the wake IRQs (RTC/LPTIM) after the pre-Stop mask-all */
-extern bool ca_pwr_hw_lptim_arm(u32 ms);                                   /* arms LPTIM1 one-shot on LSI as wake from Stop (milliseconds); false if not supported */
+extern bool ca_pwr_hw_lptim_arm(u32 ms, bool lse, u32 hz);                 /* arms LPTIM1 one-shot as wake from Stop (milliseconds), kernel LSE or LSI at hz; false if not supported */
 extern void ca_pwr_hw_lptim_disarm(void);                                  /* stops LPTIM1 and disables the IRQ after wake */
 extern void ca_pwr_hw_dbg_dump(void);                                      /* prints low-power registers (PWR/RCC/RTC/core) for wake diagnosis */
 #endif
@@ -411,6 +411,9 @@ extern void ca_jpeg_hw_decode(void);                                        /* d
 extern u32  ca_jpeg_hw_status(void);                                        /* CA_JPEG_HW_* */
 extern void ca_jpeg_hw_put(u32 w);                                          /* input FIFO */
 extern u32  ca_jpeg_hw_get(void);                                           /* output FIFO */
+extern u32  ca_jpeg_hw_burst(void);                                         /* words one threshold flag guarantees (0 = no codec) */
+extern void ca_jpeg_hw_put_n(const u32 *w, u32 n);                          /* n words to the input FIFO (after CA_JPEG_HW_IN_BURST) */
+extern void ca_jpeg_hw_get_n(u32 *w, u32 n);                                /* n words from the output FIFO (after CA_JPEG_HW_OUT_BURST) */
 extern void ca_jpeg_hw_header(u16 *w, u16 *h, u32 *nf, u32 *hsf, u32 *vsf); /* parsed: size, components, Y sampling */
 #endif
 

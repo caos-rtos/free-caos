@@ -74,7 +74,8 @@
 
 #include "caos.h"
 
-#if EN_DMA && EN_DAC
+/* DAC1 is the CMSIS instance: absent on parts with no DAC (H7Rx/7Sx) */
+#if EN_DMA && EN_DAC && defined(DAC1)
 
 #include "dma.h"
 #include "dac.h"
@@ -361,12 +362,16 @@ void ca_os_main(void)
     ca_os_run(true);
 }
 
-#else /* EN_DMA && EN_DAC not enabled */
+#else /* EN_DMA && EN_DAC not enabled, or no DAC on this part */
 
 /* Pre-scheduler diagnostic: ca_stdout_* needs a task context (TLB=NULL before
  * ca_os_run), so print straight to the console backend with PUT_N. */
 PRIVATE_STRING(m31a, "=== Example 31 ===");
+#ifndef DAC1
+PRIVATE_STRING(m31b, "no DAC on this part: no DMA tasks created");
+#else
 PRIVATE_STRING(m31b, "EN_DMA / EN_DAC == 0 : no DMA tasks created");
+#endif
 void ca_os_configure(void)
 {
     /* The line the bench matches to know this example cannot run on
@@ -377,4 +382,4 @@ void ca_os_configure(void)
 }
 void ca_os_main(void) { ca_os_run(true); }
 
-#endif /* EN_DMA && EN_DAC */
+#endif /* EN_DMA && EN_DAC && DAC1 */

@@ -15,7 +15,7 @@
  * (the two blocks share SCK and FS inside, not the data lines), so one jumper
  * closes the loop, the same on all five Nucleo:
  *
- *     PE6 SD_A  CN9-20  ---->  PE3 SD_B  CN9-22
+ *     PE6 SD_A  CN9-20  ---->  PE3 SD_B  CN9-22   (H7S3: PC1 / PF6)
  *
  *   sai test [fs] [bits] [i2s|msb]   one configuration, three ways:
  *                            polled, one DMA block, circular DMA stream.
@@ -49,7 +49,21 @@
 #define EX103_LAG_MAX   8U            /* words the receiver may trail by */
 #define EX103_FS_TOL_PM 20U           /* measured fs within 2% (H7: HSI vs HSE) */
 
+/* Same jumper position on every Nucleo, not the same pins: the H7S3 brings
+ * SD_A/SD_B to CN9-20/22 as PC1/PF6 (UM3276 Table 13), the others PE6/PE3 */
+#if MCU_ID == 773
+#define SDA_PORT        CA_GPIO_PORT_C
+#define SDA_PIN         CA_GPIO_PIN_1
+#define SDB_PORT        CA_GPIO_PORT_F
+#define SDB_PIN         CA_GPIO_PIN_6
+#define WIRE_TXT        "PC1 SD_A CN9-20 ---- PF6 SD_B CN9-22"
+#else
+#define SDA_PORT        CA_GPIO_PORT_E
+#define SDA_PIN         CA_GPIO_PIN_6
+#define SDB_PORT        CA_GPIO_PORT_E
+#define SDB_PIN         CA_GPIO_PIN_3
 #define WIRE_TXT        "PE6 SD_A CN9-20 ---- PE3 SD_B CN9-22"
+#endif
 
 /* Static, not on the stack: on H7 the stacks are in DTCM, out of DMA reach */
 static i32 s_tx[EX103_WORDS];
@@ -230,18 +244,19 @@ static void ex103_all(void)
 static void ex103_wire(void)
 {
     ca_sai_stop();
-    ca_gpio_init_port(CA_GPIO_PORT_E);
-    ca_gpio_configure(CA_GPIO_PORT_E, CA_GPIO_PIN_6, CA_GPIO_MODE_OUTPUT,
+    ca_gpio_init_port(SDA_PORT);
+    ca_gpio_init_port(SDB_PORT);
+    ca_gpio_configure(SDA_PORT, SDA_PIN, CA_GPIO_MODE_OUTPUT,
                       CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
-    ca_gpio_configure(CA_GPIO_PORT_E, CA_GPIO_PIN_3, CA_GPIO_MODE_INPUT,
+    ca_gpio_configure(SDB_PORT, SDB_PIN, CA_GPIO_MODE_INPUT,
                       CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_PULLDOWN, 0);
 
-    ca_gpio_write(CA_GPIO_PORT_E, CA_GPIO_PIN_6, 0);
+    ca_gpio_write(SDA_PORT, SDA_PIN, 0);
     for (volatile u32 d = 0; d < 20000U; d++) { }
-    const u8 lo = ca_gpio_read(CA_GPIO_PORT_E, CA_GPIO_PIN_3);
-    ca_gpio_write(CA_GPIO_PORT_E, CA_GPIO_PIN_6, 1);
+    const u8 lo = ca_gpio_read(SDB_PORT, SDB_PIN);
+    ca_gpio_write(SDA_PORT, SDA_PIN, 1);
     for (volatile u32 d = 0; d < 20000U; d++) { }
-    const u8 hi = ca_gpio_read(CA_GPIO_PORT_E, CA_GPIO_PIN_3);
+    const u8 hi = ca_gpio_read(SDB_PORT, SDB_PIN);
     const bool ok = (lo == 0U && hi == 1U);
 
     CLI_PUT_N("  " WIRE_TXT);

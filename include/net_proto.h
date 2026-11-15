@@ -217,6 +217,29 @@ static inline ca_ipv4_t ca_net_proto_get_local_ip(void)
     return s_net_proto_local_ip;
 }
 
+/*
+ * Default gateway, part of the base IP layer (independent of EN_ROUTE_SERVICE,
+ * which adds a routing table on top of it).
+ *   mask: 0 with a local IP set = /24 assumed.
+ *   gw  : 0 = automatic, .1 of the local subnet (recomputed when the IP changes).
+ * DHCP sets both from the lease (router option, or automatic when absent).
+ */
+void      ca_net_proto_set_mask(ca_ipv4_t mask);
+ca_ipv4_t ca_net_proto_get_mask(void);          /* effective mask */
+void      ca_net_proto_set_gw(ca_ipv4_t gw);    /* 0 = automatic */
+ca_ipv4_t ca_net_proto_get_gw(void);            /* effective gateway, 0 = none */
+bool      ca_net_proto_gw_is_auto(void);
+
+/* Next hop to ARP-resolve for dst: dst itself when on-link (or broadcast,
+ * multicast, mask unknown), the default gateway otherwise. */
+ca_ipv4_t ca_net_proto_next_hop(ca_ipv4_t dst);
+
+#if EN_CLI_NET && ENABLE_CLI
+/* CLI ping (prints its result), shared with the "test" subcommands of the
+ * DNS/NTP CLIs. Blocking: call from the CLI task only. */
+void ca_net_proto_cli_ping(ca_ipv4_t target, u32 count, u32 timeout_ms);
+#endif
+
 /* Registers/removes UDP handlers. fn=NULL removes. Returns false if table is full. */
 bool ca_net_proto_bind_udp(u16 port, ca_udp_rx_t fn);
 
@@ -230,6 +253,19 @@ void ca_net_proto_bind_tcp(ca_tcp_rx_raw_t fn);
  * Returns false if proto != TCP or datagram truncated.
  */
 bool ca_net_proto_tcp(const ca_ip4_frame_t *ip4, const ca_tcp_frame_t **out);
+
+/* Smallest MSS taken from a peer: below it a send loop crawls (0 sends nothing) */
+#ifndef TCP_MSS_MIN
+#define TCP_MSS_MIN  64U
+#endif
+
+/**
+ * Peer MSS from the options of a SYN or SYN-ACK already validated by
+ * ca_net_proto_tcp(). Returns dflt when the option is absent or the options
+ * are malformed (a length below 2 or past the header ends the walk), and never
+ * less than TCP_MSS_MIN.
+ */
+u16 ca_net_proto_tcp_peer_mss(const ca_tcp_frame_t *tcp, u16 dflt);
 
 /**
  * Filters L2 frame: checks length and MAC (unicast/broadcast/multicast).
@@ -381,6 +417,8 @@ typedef struct {
     u32    t1;           /* option 58, seconds; 0 = use lease/2 */
     u32    t2;           /* option 59, seconds; 0 = use lease*7/8 */
     u8     msg_type;     /* DHCP_MSG_OFFER / DHCP_MSG_ACK / DHCP_MSG_NAK */
+    u32    xid;          /* transaction id of the reply, host order */
+    ca_mac_t chaddr;     /* client hardware address the reply is for */
 } ca_dhcp_offer_t;
 
 /**
@@ -466,7 +504,7 @@ typedef struct {
  */
 u16 ca_net_proto_ntp_build_request(ca_mac_t server_mac, ca_ipv4_t server_ip,
                                     ca_mac_t local_mac,  ca_ipv4_t local_ip,
-                                    u8 *out_frame, u16 out_max);
+                                    u32 nonce, u8 *out_frame, u16 out_max);
 
 /**
  * Parse NTP server response from a UDP frame.
@@ -583,6 +621,14 @@ u16 ca_net_proto_dns_build_query(ca_mac_t server_mac, ca_ipv4_t server_ip,
  */
 bool ca_net_proto_dns_parse_response(const ca_udp_frame_t *udp,
                                       ca_dns_response_t *out);
+
+/**
+ * @brief Is the question of a DNS response the one that was asked?
+ *        true if the response carries exactly one question, for @p hostname
+ *        (compared without case), type A, class IN. A response is the answer
+ *        to a query only if its id AND its question match.
+ */
+bool ca_net_proto_dns_question_is(const ca_udp_frame_t *udp, const char *hostname);
 
 #endif /* EN_NET_DNS */
 

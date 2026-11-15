@@ -49,7 +49,6 @@ static const ca_ipv4_t s_ip  = { .v = { 192U, 168U, 10U, 33U } };
 static const ca_net_cfg_t net_cfg = {
     .ip  = { .v = { 192U, 168U, 10U, 33U } },
     .mac = { .v = { 0x02U, 0x00U, 0x00U, 0x00U, 0x00U, 0x33U } },
-    .arp  = { .renew_ms = 30000U, .cache_size = 0U },
     .udp  = { .bindings = {{0}}, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -88,6 +87,10 @@ static void pool_selftest(void)
     bool region_ok = (addr >= 0x20000000U && addr < 0x20080000U);
     ca_stdout_printf_n("  pool[0] @ 0x%08X  %s", addr,
         region_ok ? "internal SRAM OK" : "WRONG REGION!");
+#elif MCU_ID == 439
+    /* main SRAM: the F4 ETH DMA cannot reach the CCM at 0x10000000 */
+    ca_stdout_printf_n("  pool[0] @ 0x%08X  %s", addr,
+        (addr >= 0x20000000U && addr < 0x20030000U) ? "SRAM OK" : "WRONG REGION!");
 #elif MCU_ID == 767 || MCU_ID == 746
     /* outside the TCM: the DTCM ends at 0x20020000 on the F767, 0x20010000
      * on the F746, and above it there is SRAM1/SRAM2 up to 0x2007C000+16K. */
@@ -198,8 +201,8 @@ static u32 task_net(void *arg)
     return 0;
 }
 
-/* Stats/pool/leak diagnostics: available on request via CLI "eth stats" |
- * "eth pool" | "eth dump" (caos/drivers/src/eth.c) — no periodic task here. */
+/* Stats/pool/leak diagnostics: available on request via CLI "ip stats"
+ * (caos/net) | "eth pool" | "eth dump" (caos/drivers/src/eth.c) — no periodic task here. */
 
 /* ============================================================================
  * Link callback / monitor
@@ -238,6 +241,15 @@ static u32 task_heartbeat(void *arg)
  * ============================================================================ */
 static void eth_gpio_init(void)
 {
+#if MCU_ID == 773
+    /* NUCLEO-H7S3L8 (UM3276 7.13, DS14359 AF11): REF_CLK PB6, MDIO PA2,
+     * MDC PG6, CRS_DV PA7, RXD0/RXD1 PG4/PG5, TX_EN PG11, TXD0/TXD1 PG13/PG12 */
+    static const struct { u8 port; u8 pin; } pins[] = {
+        { CA_GPIO_PORT_B,  6U }, { CA_GPIO_PORT_A,  2U }, { CA_GPIO_PORT_G,  6U },
+        { CA_GPIO_PORT_A,  7U }, { CA_GPIO_PORT_G,  4U }, { CA_GPIO_PORT_G,  5U },
+        { CA_GPIO_PORT_G, 11U }, { CA_GPIO_PORT_G, 13U }, { CA_GPIO_PORT_G, 12U },
+    };
+#else
     static const struct { u8 port; u8 pin; } pins[] = {
         { CA_GPIO_PORT_A,  1U }, { CA_GPIO_PORT_A,  2U }, { CA_GPIO_PORT_A,  7U },
         { CA_GPIO_PORT_C,  1U }, { CA_GPIO_PORT_C,  4U }, { CA_GPIO_PORT_C,  5U },
@@ -249,6 +261,7 @@ static void eth_gpio_init(void)
         { CA_GPIO_PORT_B, 13U },
 #endif
     };
+#endif
     for (u32 i = 0U; i < sizeof(pins)/sizeof(pins[0]); i++) {
         ca_gpio_configure(pins[i].port, pins[i].pin,
             CA_GPIO_MODE_AF, CA_GPIO_OTYPE_PP,
@@ -291,6 +304,9 @@ void ca_os_configure(void)
      * Unlike the DHCP examples, the address is known at compile time here, so
      * it is passed straight in rather than as 0.0.0.0 to be filled in later. */
     ca_arp_service_init(s_mac, s_ip);
+    /* and its task: without it ca_arp_resolve() never gets an answer, so
+     * the board could not reach a host that had not talked to it first */
+    ca_arp_service_start();
 }
 
 void ca_os_main(void)

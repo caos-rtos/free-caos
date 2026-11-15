@@ -10,7 +10,7 @@
  *
  * @note    Supported families:
  *            F1xx : no ETH (stub)
- *            F4xx : legacy GMAC (F407/F429 only; F446 = stub)
+ *            F4xx : legacy GMAC (F407/F439 only; F446 = stub)
  *            F7xx : legacy GMAC (same IP as F4xx)
  *            H7xx : GMAC 4.x (FDCAN-style registers, MTL layer)
  *            H5xx : GMAC 4.x (same IP as H7xx; different RCC/SBS regs)

@@ -65,9 +65,10 @@
  * ca_tcp_listen() with on_accept/on_rx set runs in the net task's context, so
  * N connections cost no extra stacks - which matters, because the point is to
  * measure the buffer pool and not to spend the RAM under test on task stacks.
- * It is also why ex44's iperf service cannot be used here: it does ONE
- * blocking ca_tcp_accept() and then a blocking receive loop, so it is
- * single-connection by construction.
+ * ex44's iperf server was single-connection (one blocking accept, then a
+ * receive loop) until 28/10; it now uses this same callback scheme, but it
+ * only counts bytes - the per-connection detail and the pool readings that
+ * this example is about stay here.
  *
  * Peer PC:
  *   sudo python3 examples/example_85/msink_peer.py \
@@ -376,7 +377,6 @@ static void on_link_change(bool up)
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .addr = 0U },
     .mac  = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x85U } },
-    .arp  = { .renew_ms = 30000U },
     .udp  = { .bindings = { {0U, NULL} }, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -474,6 +474,15 @@ static u32 task_eth_mon(void *arg)
  * ========================================================================== */
 static void eth_gpio_init(void)
 {
+#if MCU_ID == 773
+    /* NUCLEO-H7S3L8 (UM3276 7.13, DS14359 AF11): REF_CLK PB6, MDIO PA2,
+     * MDC PG6, CRS_DV PA7, RXD0/RXD1 PG4/PG5, TX_EN PG11, TXD0/TXD1 PG13/PG12 */
+    static const struct { u8 port; u8 pin; } pins[] = {
+        { CA_GPIO_PORT_B,  6U }, { CA_GPIO_PORT_A,  2U }, { CA_GPIO_PORT_G,  6U },
+        { CA_GPIO_PORT_A,  7U }, { CA_GPIO_PORT_G,  4U }, { CA_GPIO_PORT_G,  5U },
+        { CA_GPIO_PORT_G, 11U }, { CA_GPIO_PORT_G, 13U }, { CA_GPIO_PORT_G, 12U },
+    };
+#else
     static const struct { u8 port; u8 pin; } pins[] = {
         { CA_GPIO_PORT_A,  1U }, { CA_GPIO_PORT_A,  2U }, { CA_GPIO_PORT_A,  7U },
         { CA_GPIO_PORT_C,  1U }, { CA_GPIO_PORT_C,  4U }, { CA_GPIO_PORT_C,  5U },
@@ -488,6 +497,7 @@ static void eth_gpio_init(void)
         { CA_GPIO_PORT_B, 13U },
 #endif
     };
+#endif
     for (u32 i = 0U; i < sizeof(pins)/sizeof(pins[0]); i++) {
         ca_gpio_configure(pins[i].port, pins[i].pin,
             CA_GPIO_MODE_AF, CA_GPIO_OTYPE_PP,

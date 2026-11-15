@@ -96,7 +96,7 @@ typedef enum {
 
 #define EVAL_F4XX(MSG)         
 #define EVAL_F407(MSG)         
-#define EVAL_F429(MSG)         
+#define EVAL_F439(MSG)         
 #define EVAL_F446(MSG)         
 
 #define EVAL_F7XX(MSG)         
@@ -108,6 +108,9 @@ typedef enum {
 #define EVAL_H7XX(MSG)          
 #define EVAL_H747(MSG)          
 #define EVAL_H753(MSG)     
+
+#define EVAL_H7RSXX(MSG)
+#define EVAL_H773(MSG)
 
 /* ex63: set to 0 (USART3 VCP used by DMA protocol) */
 /* =============================================================================

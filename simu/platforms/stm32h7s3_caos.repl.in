@@ -1,0 +1,218 @@
+// STM32H7S3 (RM0477), written for caOS on Renode: Renode has no STM32H7Rx/7Sx
+// model. Same Cortex-M7 core as the H753 (MPU v7, double-precision FPU).
+// The images link at 0x70000000 (XSPI2, execute in place): here that window
+// is plain memory the ELF is loaded into. The trampoline (workspace/app_5,
+// 0x08000000) and the XSPI controller are not simulated.
+// @inline(file) is replaced by simu/gen_platforms.py with the stub's source.
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    priorityMask: 0xF0
+    systickFrequency: 600000000
+    IRQ -> cpu@0
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m7"
+    nvic: nvic
+
+// Memories (hw/h7rsxx/h773/STM32H7S3L8HX_XSPI2.ld, RM0477 2.3)
+itcm: Memory.MappedMemory @ sysbus 0x00000000
+    size: 0x10000
+
+// Internal flash: only the trampoline lives there on the board, empty here.
+flash: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x10000
+
+// System memory: unique ID at 0x08FFF800 (read by app_3 and the banner).
+sysmem: Memory.MappedMemory @ sysbus 0x08FFF000
+    size: 0x1000
+
+dtcm: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x10000
+
+// AXI SRAM1-4, 456 KB: RAM, USB_SRAM and NET_SRAM of the linker script
+axisram: Memory.MappedMemory @ sysbus 0x24000000
+    size: 0x72000
+
+// AHB SRAM1/2: ETH DMA descriptors
+ahbsram: Memory.MappedMemory @ sysbus 0x30000000
+    size: 0x8000
+
+bkpsram: Memory.MappedMemory @ sysbus 0x38800000
+    size: 0x1000
+
+// XSPI2 window: the image (under 200 KB today; 2 MB of the board's 32 MB)
+xspi2: Memory.MappedMemory @ sysbus 0x70000000
+    size: 0x200000
+
+dwt: Miscellaneous.DWT @ sysbus 0xE0001000
+    frequency: 600000000
+
+// Console: USART3 on PD8/PD9 -> ST-LINK VCP (UART_DBG_NUM 3), APB1 150 MHz
+usart3: UART.STM32F7_USART @ sysbus 0x40004800
+    frequency: 150000000
+    IRQ -> nvic@84
+
+// GPIO: ports A-H and M-P (no I/J/K on this part), 0x58020000 + 0x400 * n
+gpioPortA: GPIOPort.STM32_GPIOPort @ sysbus <0x58020000, +0x400>
+    numberOfAFs: 16
+
+gpioPortB: GPIOPort.STM32_GPIOPort @ sysbus <0x58020400, +0x400>
+    numberOfAFs: 16
+
+gpioPortC: GPIOPort.STM32_GPIOPort @ sysbus <0x58020800, +0x400>
+    numberOfAFs: 16
+
+gpioPortD: GPIOPort.STM32_GPIOPort @ sysbus <0x58020C00, +0x400>
+    numberOfAFs: 16
+
+gpioPortE: GPIOPort.STM32_GPIOPort @ sysbus <0x58021000, +0x400>
+    numberOfAFs: 16
+
+gpioPortF: GPIOPort.STM32_GPIOPort @ sysbus <0x58021400, +0x400>
+    numberOfAFs: 16
+
+gpioPortG: GPIOPort.STM32_GPIOPort @ sysbus <0x58021800, +0x400>
+    numberOfAFs: 16
+
+gpioPortH: GPIOPort.STM32_GPIOPort @ sysbus <0x58021C00, +0x400>
+    numberOfAFs: 16
+
+gpioPortM: GPIOPort.STM32_GPIOPort @ sysbus <0x58023000, +0x400>
+    numberOfAFs: 16
+
+gpioPortN: GPIOPort.STM32_GPIOPort @ sysbus <0x58023400, +0x400>
+    numberOfAFs: 16
+
+gpioPortO: GPIOPort.STM32_GPIOPort @ sysbus <0x58023800, +0x400>
+    numberOfAFs: 16
+
+gpioPortP: GPIOPort.STM32_GPIOPort @ sysbus <0x58023C00, +0x400>
+    numberOfAFs: 16
+
+rcc: Python.PythonPeripheral @ sysbus 0x58024400
+    size: 0x400
+    initable: true
+    script: '''
+@inline(h7rs_rcc_stub.py)
+'''
+
+pwr: Python.PythonPeripheral @ sysbus 0x58024800
+    size: 0x400
+    initable: true
+    script: '''
+@inline(h7rs_pwr_stub.py)
+'''
+
+// FLASH controller registers: caOS writes ACR (latency) and reads it back.
+flash_regs: Python.PythonPeripheral @ sysbus 0x52002000
+    size: 0x400
+    initable: true
+    script: '''
+@inline(regfile_stub.py)
+'''
+
+// SBS (the SYSCFG of this family): EXTI line selection, compensation cell.
+sbs: Python.PythonPeripheral @ sysbus 0x58000400
+    size: 0x400
+    initable: true
+    script: '''
+@inline(regfile_stub.py)
+'''
+
+// RTC and TAMP (backup registers): register files.
+rtc: Python.PythonPeripheral @ sysbus 0x58004000
+    size: 0x400
+    initable: true
+    script: '''
+@inline(regfile_stub.py)
+'''
+
+tamp: Python.PythonPeripheral @ sysbus 0x58004400
+    size: 0x400
+    initable: true
+    script: '''
+@inline(regfile_stub.py)
+'''
+
+// ADC1 (+ ADC12 common at +0x300): register stub, H7 layout.
+adc1: Python.PythonPeripheral @ sysbus 0x40022000
+    size: 0x400
+    initable: true
+    script: '''
+@inline(adc_stub.py)
+'''
+
+// RNG: register stub on the host's /dev/urandom (rng_stub.py).
+rng: Python.PythonPeripheral @ sysbus 0x48020000
+    size: 0x400
+    initable: true
+    script: '''
+@inline(rng_stub.py)
+'''
+
+// DTS: register stub (h7rs_dts_stub.py): without it the boot polls 4M times.
+dts: Python.PythonPeripheral @ sysbus 0x58006800
+    size: 0x400
+    initable: true
+    script: '''
+@inline(h7rs_dts_stub.py)
+'''
+
+// Timers (CMSIS bases/IRQs; TIM1 on its update IRQ). Kernel clock 300 MHz
+// (APB 150 MHz x2); TIM2/TIM5 are 32 bit.
+timer1: Timers.STM32_Timer @ sysbus 0x42000000
+    frequency: 300000000
+    initialLimit: 0xFFFF
+    -> nvic@48
+
+timer2: Timers.STM32_Timer @ sysbus 0x40000000
+    frequency: 300000000
+    initialLimit: 0xFFFFFFFF
+    -> nvic@51
+
+timer3: Timers.STM32_Timer @ sysbus 0x40000400
+    frequency: 300000000
+    initialLimit: 0xFFFF
+    -> nvic@52
+
+timer4: Timers.STM32_Timer @ sysbus 0x40000800
+    frequency: 300000000
+    initialLimit: 0xFFFF
+    -> nvic@53
+
+timer5: Timers.STM32_Timer @ sysbus 0x40000C00
+    frequency: 300000000
+    initialLimit: 0xFFFFFFFF
+    -> nvic@54
+
+timer6: Timers.STM32_Timer @ sysbus 0x40001000
+    frequency: 300000000
+    initialLimit: 0xFFFF
+    -> nvic@55
+
+timer7: Timers.STM32_Timer @ sysbus 0x40001400
+    frequency: 300000000
+    initialLimit: 0xFFFF
+    -> nvic@56
+
+timer15: Timers.STM32_Timer @ sysbus 0x42004000
+    frequency: 300000000
+    initialLimit: 0xFFFF
+    -> nvic@116
+
+timer16: Timers.STM32_Timer @ sysbus 0x42004400
+    frequency: 300000000
+    initialLimit: 0xFFFF
+    -> nvic@117
+
+timer17: Timers.STM32_Timer @ sysbus 0x42004800
+    frequency: 300000000
+    initialLimit: 0xFFFF
+    -> nvic@118
+
+// IWDG (LSI 32 kHz): Renode's STM32 model, so `reboot` (watchdog armed, feed
+// stopped) restarts the board instead of hanging (simu/CHANGES.md 29).
+iwdg: Timers.STM32_IndependentWatchdog @ sysbus 0x58004800
+    frequency: 32000
+    windowOption: true
+    defaultPrescaler: 0x4

@@ -54,6 +54,9 @@ typedef void (*ca_usb_unmounted_cb_t)(void);
 typedef void (*ca_usb_setup_cb_t)(const u8 setup[8]);
 typedef void (*ca_usb_rx_cb_t)(u8 ep_addr, u16 len);
 typedef void (*ca_usb_tx_done_cb_t)(u8 ep_addr);
+/* Release of a buffer given to ca_usb_ep_write_ref(): called once, from the
+ * USB interrupt or from ep_close/reset, when the driver no longer reads it. */
+typedef void (*ca_usb_tx_release_cb_t)(u32 cookie);
 
 typedef struct {
     ca_usb_reset_cb_t     on_reset;
@@ -80,6 +83,9 @@ typedef struct {
     bool           (*ep_close)      (u32 usb_num, u8 ep_addr);
     bool           (*ep_clear_stall)(u32 usb_num, u8 ep_addr);
     bool           (*ep_is_stalled) (u32 usb_num, u8 ep_addr);
+    /* Optional (NULL = not supported): queue buf by REFERENCE, no copy. */
+    bool           (*ep_write_ref)  (u32 usb_num, u8 ep_addr, const u8 *buf, u16 len,
+                                     ca_usb_tx_release_cb_t release, u32 cookie);
 } ca_usb_dev_ops_t;
 
 /* ── Public API ─────────────────────────────────────────────────────────── */
@@ -93,6 +99,17 @@ bool ca_usb_ep_open(u32 usb_num, u8 ep_addr, ca_usb_ep_type_t type, u16 mps);
 
 /* Starts IN transmission — returns false if endpoint is busy */
 bool ca_usb_ep_write(u32 usb_num, u8 ep_addr, const u8 *buf, u16 len);
+
+/* ZERO COPY variant of ca_usb_ep_write() for bulk/intr IN (not EP0): the
+ * driver queues pointers into buf instead of copying it, and the FIFO is fed
+ * straight from buf. buf must be 4-byte aligned and stay untouched until
+ * release(cookie), which the driver calls exactly once - when the last packet
+ * has gone out, or when the queue is flushed (ep_close, bus reset).
+ * Returns false, WITHOUT taking buf (release is not called), when the driver
+ * has no reference path (fall back to ca_usb_ep_write), the queue is full or
+ * buf is not aligned. */
+bool ca_usb_ep_write_ref(u32 usb_num, u8 ep_addr, const u8 *buf, u16 len,
+                         ca_usb_tx_release_cb_t release, u32 cookie);
 
 /* Reads data received on OUT endpoint (call after on_rx callback) */
 u16  ca_usb_ep_read(u32 usb_num, u8 ep_addr, u8 *buf, u16 max_len);

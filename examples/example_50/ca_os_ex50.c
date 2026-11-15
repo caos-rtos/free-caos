@@ -10,6 +10,7 @@
  *   NUCLEO-H753ZI   — OTG_HS ULPI (USB_NUM=0, MPS=512)
  *                     or OTG_FS CN14  (USB_NUM=1, MPS=64)
  *   NUCLEO-U575ZI-Q — internal OTG_FS     (USB_NUM=0, MPS=64)
+ *   NUCLEO-H7S3L8   — OTG_HS HS PHY at FS (USB_NUM=0, MPS=64)
  *   NUCLEO-F407ZG   — internal OTG_FS     (USB_NUM=0, MPS=64)
  *
  * Features:
@@ -39,12 +40,16 @@
 #define USB_NUM      1U    /* OTG_FS CN14 without ULPI — change to 0 if ULPI is available */
 #define EP_BULK_MPS  64U   /* 64 for OTG_FS, 512 for OTG_HS ULPI */
 
-#elif MCU_ID == 407 || MCU_ID == 446 || MCU_ID == 767
+#elif MCU_ID == 407 || MCU_ID == 439 || MCU_ID == 446 || MCU_ID == 767
 #define USB_NUM      0U          /* OTG_FS, same layout on F407 and F446 */
 #define EP_BULK_MPS  64U
 
 #elif MCU_ID == 563
 #define USB_NUM      0U          /* USB_DRD_FS — single instance H563 */
+#define EP_BULK_MPS  64U
+
+#elif MCU_ID == 773
+#define USB_NUM      0U          /* OTG_HS, integrated HS PHY run at FS (Type-C CN2) */
 #define EP_BULK_MPS  64U
 
 #else
@@ -70,7 +75,7 @@
  * no data-stage chunking). U575 has USB_EP_MAX=6 → only 5 data EPs. */
 #if MCU_ID == 575
 #define NUM_DATA_EP  5U
-#elif MCU_ID == 407 || MCU_ID == 446
+#elif MCU_ID == 407 || MCU_ID == 439 || MCU_ID == 446
 #define NUM_DATA_EP  3U    /* F407/F446 OTG_FS: USB_EP_MAX=4 → EP0 + 3 data EPs (EP1..3).
                             * Without the 446 here the #else below claimed 6 EPs in the
                             * config descriptor while the hardware has 3: the host opened

@@ -18,6 +18,8 @@
  *   fault null_r    — read  *(u32*)0   -> M33: fault; M4/M7: NO fault (flash aliased at 0)
  *   fault null_w    — write *(u32*)0   -> M33: MemManage/BusFault; M4/M7: NO fault (write absorbed by locked FPEC)
  *   fault ram       — access beyond RAM end   -> BusFault
+ *   fault imprecise — same store, no barrier, PendSV due -> BusFault IMPRECISERR
+ *                     surfacing in PendSV: must fault the task, not halt the system
  *   fault flash     — read beyond Flash end   -> BusFault
  *   fault ibuserr   — fetch past flash end     -> BusFault IBUSERR
  *   fault ro        — write to own stack canary (RO) -> MemManage DACCVIOL
@@ -61,6 +63,11 @@
  *                     the stack guard) and run again, "alive after restart,
  *                     canary OK". The only case that takes the RESTART path;
  *                     on M33 that path once gave IACCVIOL (TODO §1).
+ *   fault emerg     — div0 in a CA_FAULT_EXEC_EMERGENCY task: its emergency
+ *                     handler (ca_task_set_emergency_exec) runs once, then the
+ *                     task is removed; f_emerg_chk prints 'emerg: PASS'
+ *   fault emerg_rst — same with EXEC_EMERGENCY|RESTART_THREAD: handler once,
+ *                     then the task is renewed and prints 'emerg_rst: PASS'
  *   fault heap      — user data over a block header, then free it and exit:
  *                     'Invalid Free' + 'heap chain corrupted', NO fault
  *
@@ -74,9 +81,12 @@
  * (selected by MCU_ID). A fixed "big" value would still be mapped on parts with
  * more RAM/flash (F407: 128K/512K vs U575: 628K/2MB), so the end must be
  * per-family. RAM base 0x20000000, Flash base 0x08000000 on all these parts. */
-#if   MCU_ID == 407 || MCU_ID == 429 || MCU_ID == 446
+#if   MCU_ID == 407 || MCU_ID == 446
   #define ADDR_BEYOND_RAM     0x20040000UL   /* F4: up to 256K SRAM → past end */
   #define ADDR_BEYOND_FLASH   0x08100000UL   /* F4: up to 1M flash  → past end */
+#elif MCU_ID == 439
+  #define ADDR_BEYOND_RAM     0x20040000UL   /* F439: 192K SRAM     → past end */
+  #define ADDR_BEYOND_FLASH   0x08200000UL   /* F439: 2M flash, 0x08100000 is bank 2 */
 #elif MCU_ID == 103
   #define ADDR_BEYOND_RAM     0x20018000UL   /* F103: 96K SRAM      → past end */
   #define ADDR_BEYOND_FLASH   0x08080000UL   /* F103: 512K flash    → past end */
@@ -319,6 +329,42 @@ static u32 task_ram(void *arg) {
     return 0;
 }
 
+/* The same store WITHOUT the barrier, with the tick's PendSV due right after
+ * it - what a stray write does when the tick lands a few cycles later. The
+ * natural paths do not show it on this build: a yield writes ICSR (strongly
+ * ordered, waits for the bus error) and a task exit is long enough for the
+ * error to arrive in thread mode. So PendSV is pended first, IRQs masked, and
+ * taken at the CPSIE with the store still in the write buffer: the IMPRECISE
+ * BusFault then pends inside PendSV (PRIMASK set) and used to fire at its
+ * CPSIE, in handler mode - no task to blame, system halted. It must fault
+ * THIS task, and the system must go on. */
+static u32 task_imprecise(void *arg) {
+    (void)arg;
+    ca_stdout_put_n("[EX68] provoking: store beyond RAM end, no barrier, PendSV due");
+    ca_os_sleep(20);                    /* the line above is out before the store */
+    __disable_irq();
+    SCB->ICSR = SCB_ICSR_PENDSVSET_Msk;  /* the tick's PendSV, due now */
+    __DSB();
+    *(volatile u32 *)ADDR_BEYOND_RAM = 0x12345678;
+    __enable_irq();                     /* PendSV enters with the store in flight */
+    ca_stdout_put_n("[EX68] imprecise: back in the task, no fault (store absorbed)");
+    return 0;
+}
+
+/* The same, in a RESTART task: the policy applied from inside PendSV must
+ * renew it, and the second life runs to the end. */
+static volatile u32 g_impr_runs;
+
+static u32 task_imprecise_rst(void *arg) {
+    const u32 run = ++g_impr_runs;
+    const ca_thread_context_t *ctx = ca_scheduler_get_current_context();
+    ca_stdout_printf_n("[EX68] imprecise_rst: run %u (n_restart=%u)",
+                       run, ctx ? (u32)ctx->n_restart : 0U);
+    if (run == 1U) return task_imprecise(arg);
+    ca_stdout_put_n("[EX68] imprecise_rst: alive after restart");
+    return 0;
+}
+
 static u32 task_flash(void *arg) {
     (void)arg;
     ca_stdout_put_n("[EX68] provoking: read beyond Flash end");
@@ -423,6 +469,87 @@ static u32 task_restart(void *arg) {
     }
     ca_stdout_printf_n("[EX68] restart: alive after restart, canary %s",
                        canary_ok ? "OK" : "BAD");
+    return 0;
+}
+
+/* Emergency handler policies: CA_FAULT_EXEC_EMERGENCY alone (handler, then the
+ * task is removed) and CA_FAULT_EXEC_EMERGENCY|CA_FAULT_RESTART_THREAD
+ * (handler, then the task is renewed). The task registers its own handler on
+ * the first run, so nothing can fault before the registration.
+ *
+ * The handler runs inside ca_scheduler_manage_fault, i.e. in the fault
+ * handler: it only records what it got, the verdict is printed by a task. */
+#define EMERG_PARAM_REMOVE    6802U
+#define EMERG_PARAM_RESTART   6803U
+
+static volatile u32              g_emerg_runs;
+static volatile u32              g_emerg_calls;
+static volatile u32              g_emerg_param;
+static volatile ca_task_handle_t g_emerg_h;      /* handle the handler was given */
+static volatile ca_task_handle_t g_emerg_self;   /* handle of the faulting task  */
+
+static void emerg_handler(ca_task_handle_t h, u32 emerg_param) {
+    g_emerg_calls++;
+    g_emerg_param = emerg_param;
+    g_emerg_h     = h;
+}
+
+static void emerg_reset(void) {
+    g_emerg_runs  = 0U;
+    g_emerg_calls = 0U;
+    g_emerg_param = 0U;
+    g_emerg_h     = CA_TASK_HANDLE_NONE;
+    g_emerg_self  = CA_TASK_HANDLE_NONE;
+}
+
+/* arg = expected emerg_param: it also tells the task which policy it has */
+static u32 task_emerg(void *arg) {
+    const u32 param   = (u32)(uintptr_t)arg;
+    const bool rst    = (param == EMERG_PARAM_RESTART);
+    const char *tag   = rst ? "emerg_rst" : "emerg";
+    const u32 run     = ++g_emerg_runs;
+    const ca_thread_context_t *ctx = ca_scheduler_get_current_context();
+    ca_stdout_printf_n("[EX68] %s: run %u (n_restart=%u)",
+                       tag, run, ctx ? (u32)ctx->n_restart : 0U);
+    if (run == 1U) {
+        g_emerg_self = ctx ? ca_os_task_handle(ctx) : CA_TASK_HANDLE_NONE;
+        if (!ca_task_set_emergency_exec(g_emerg_self, emerg_handler, param)) {
+            ca_stdout_printf_n("[EX68] %s: FAIL (ca_task_set_emergency_exec refused)", tag);
+            return 0;
+        }
+        ca_stdout_printf_n("[EX68] %s: provoking divide by zero, expect EMERGENCY then %s",
+                           tag, rst ? "RESTART" : "RECOVER");
+        volatile u32 a = 100, b = 0;
+        g_sink += a / b;                     /* UsageFault DIVBYZERO */
+        return 0;
+    }
+    if (!rst) {
+        ca_stdout_put_n("[EX68] emerg: FAIL (removed task ran again)");
+        return 0;
+    }
+    /* Second life of the RESTART variant: the handler ran exactly once, before
+     * the renew, with this task's handle and its own parameter. */
+    const bool ok = (g_emerg_calls == 1U) && (g_emerg_param == param) &&
+                    (g_emerg_h == g_emerg_self);
+    ca_stdout_printf_n("[EX68] emerg_rst: %s (handler calls=%u param=%u handle %s, alive after restart)",
+                       ok ? "PASS" : "FAIL", (u32)g_emerg_calls, (u32)g_emerg_param,
+                       (g_emerg_h == g_emerg_self) ? "OK" : "BAD");
+    return 0;
+}
+
+/* Verdict of the REMOVE variant: the faulting task cannot report, it is gone.
+ * Waits for the fault, then checks the handler and that the slot is free. */
+static u32 task_emerg_check(void *arg) {
+    (void)arg;
+    ca_os_sleep(1000);
+    const bool gone = (g_emerg_self != CA_TASK_HANDLE_NONE) &&
+                      (ca_os_thid_from_handle(g_emerg_self) == (u32)-1);
+    const bool ok   = (g_emerg_calls == 1U) && (g_emerg_param == EMERG_PARAM_REMOVE) &&
+                      (g_emerg_h == g_emerg_self) && (g_emerg_runs == 1U) && gone;
+    ca_stdout_printf_n("[EX68] emerg: %s (handler calls=%u param=%u handle %s, runs=%u, task %s)",
+                       ok ? "PASS" : "FAIL", (u32)g_emerg_calls, (u32)g_emerg_param,
+                       (g_emerg_h == g_emerg_self) ? "OK" : "BAD", (u32)g_emerg_runs,
+                       gone ? "removed" : "STILL ALIVE");
     return 0;
 }
 
@@ -740,9 +867,11 @@ static bool user_cli_handler(c_str *pcmd) {
          * and came out cut at 'und~OVF' */
         CLI_PUT_N("ex68 fault: null_r | null_w | ram | flash | ibuserr | ro | stack | stackjmp | stackup | xn | runaway");
         CLI_PUT_N("ex68 fault: div0 | unalign | undef | invstate | forced" EX68_FP_HELP);
+        CLI_PUT_N("ex68 fault: imprecise | imprecise_rst (store beyond RAM, no barrier, PendSV due)");
         CLI_PUT_N("ex68 fault: safeguard | sg_irq (kernel assertions, sg_irq resets the part)");
         CLI_PUT_N("ex68 fault: heap (corrupted block header: refused, no fault; heap stays corrupted)");
         CLI_PUT_N("ex68 fault: restart (div0 once in a RESTART task: renewed, runs again)");
+        CLI_PUT_N("ex68 fault: emerg | emerg_rst (emergency handler, then task removed | renewed)");
 #if EN_TIMER
         CLI_PUT_N("ex68 fault: irq (div0 inside the TIM3 ISR, halts the part)");
 #endif
@@ -758,6 +887,13 @@ static bool user_cli_handler(c_str *pcmd) {
     if (ca_strncmp(p, "null_r", 6)  == 0) { spawn("f_null_r",  task_null_r);  return true; }
     if (ca_strncmp(p, "null_w", 6)  == 0) { spawn("f_null_w",  task_null_w);  return true; }
     if (ca_strncmp(p, "ram", 3)     == 0) { spawn("f_ram",     task_ram);     return true; }
+    if (ca_strncmp(p, "imprecise_rst",13)== 0) {
+        g_impr_runs = 0U;
+        ca_os_job("f_impr_rst", CA_TH_LEVEL3, task_imprecise_rst, NULL, STACK_SMALL, CA_JOB_STD,
+                  CA_FAULT_RESTART_THREAD);
+        return true;
+    }
+    if (ca_strncmp(p, "imprecise",9)== 0) { spawn("f_imprecise",task_imprecise);return true; }
     if (ca_strncmp(p, "flash", 5)   == 0) { spawn("f_flash",   task_flash);   return true; }
     if (ca_strncmp(p, "runaway", 7) == 0) { spawn("f_runaway", task_runaway); return true; }
     if (ca_strncmp(p, "xn", 2)      == 0) { spawn("f_xn",      task_xn);      return true; }
@@ -780,6 +916,20 @@ static bool user_cli_handler(c_str *pcmd) {
         g_restart_runs = 0U;
         ca_os_job("f_restart", CA_TH_LEVEL3, task_restart, NULL, STACK_SMALL, CA_JOB_STD,
                   CA_FAULT_RESTART_THREAD);
+        return true;
+    }
+    /* emerg_rst before emerg: prefix match */
+    if (ca_strncmp(p, "emerg_rst", 9) == 0) {
+        emerg_reset();
+        ca_os_job("f_emerg_rst", CA_TH_LEVEL3, task_emerg, (void *)(uintptr_t)EMERG_PARAM_RESTART,
+                  STACK_SMALL, CA_JOB_STD, CA_FAULT_EMERGENCY_RESTART);
+        return true;
+    }
+    if (ca_strncmp(p, "emerg", 5) == 0) {
+        emerg_reset();
+        ca_os_job("f_emerg", CA_TH_LEVEL3, task_emerg, (void *)(uintptr_t)EMERG_PARAM_REMOVE,
+                  STACK_SMALL, CA_JOB_STD, CA_FAULT_EXEC_EMERGENCY);
+        spawn("f_emerg_chk", task_emerg_check);
         return true;
     }
 #if EN_TIMER

@@ -74,6 +74,8 @@ typedef struct {
 #define CA_JPEG_HW_OUT_DATA 0x200U  /* output FIFO not empty */
 #define CA_JPEG_HW_EOC      0x400U  /* end of conversion */
 #define CA_JPEG_HW_HDR      0x800U  /* header parsed */
+#define CA_JPEG_HW_IN_BURST  0x1000U /* input FIFO threshold: ca_jpeg_hw_burst() words fit */
+#define CA_JPEG_HW_OUT_BURST 0x2000U /* output FIFO threshold: ca_jpeg_hw_burst() words ready */
 
 bool ca_jpeg_init(void);            /* false = no JPEG codec */
 bool ca_jpeg_geometry(u16 width, u16 height, ca_jpeg_css_t css, ca_jpeg_info_t *info);

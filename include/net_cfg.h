@@ -15,7 +15,6 @@
  *          ca_net_cfg_t net_cfg = {
  *              .ip  = { 192, 168, 10, 33 },
  *              .mac = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x33 },
- *              .arp = { .renew_ms = 30000U },
  *              .udp = { 0 },
  *          };
  *          ca_net_proto_init(&net_cfg);
@@ -79,15 +78,6 @@ typedef struct {
 } ca_udp_cfg_t;
 
 /* ----------------------------------------------------------------------- */
-/* ARP                                                                      */
-/* ----------------------------------------------------------------------- */
-
-typedef struct {
-    u32 renew_ms;   /* ARP cache entry lifetime in ms (0 = no cache) */
-    u8  cache_size; /* number of entries in static ARP cache (0 = disabled) */
-} ca_arp_cfg_t;
-
-/* ----------------------------------------------------------------------- */
 /* ICMP                                                                     */
 /* ----------------------------------------------------------------------- */
 
@@ -138,12 +128,12 @@ typedef struct {
 
 typedef struct {
     ca_ipv4_t        ip;    /* local IPv4 address */
-    ca_ipv4_t        mask;  /* local subnet mask (0 = unknown, set by DHCP) */
+    ca_ipv4_t        mask;  /* local subnet mask (0 = /24 for a static IP, else set by DHCP) */
+    ca_ipv4_t        gw;    /* default gateway (0 = .1 of the local subnet, or the DHCP router) */
     ca_mac_t         mac;   /* local MAC address (used for L2 filter) */
     u16           mtu;            /* max TX payload bytes (0 = default 1500) */
     u8            phy_nrst_port;  /* GPIO port index for PHY nRST (0xFF = not wired) */
     u8            phy_nrst_pin;   /* GPIO pin 0..15 */
-    ca_arp_cfg_t  arp;
     ca_udp_cfg_t  udp;
     ca_icmp_cfg_t icmp;
 #if EN_NET_DHCP

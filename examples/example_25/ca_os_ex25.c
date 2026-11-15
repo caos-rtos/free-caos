@@ -119,7 +119,8 @@
 #define WIRE_B_TXT         "PB9 (CN7 pin 4) ---- PE11 (CN10 pin 6)  [signal B]"
 
 
-#elif MCU_ID == 446
+#elif MCU_ID == 446 || MCU_ID == 439
+/* F439ZI: same board, pins (UM1974 Table 17) and AFs (DS9484 Table 12). */
 /* NUCLEO-F446ZE (MB1137), pins from UM1974 Table 18. Same trap as the U575:
  * the generic TIM4 CH1/CH2 pair is PB6/PB7 and PB7 is the blue LD2 here
  * (UM1974 §7.5), so it cannot be an encoder INPUT. TIM1 is used instead:
@@ -199,6 +200,27 @@
 #define ENC_TXT            "TIM4 CH1:PB6 CN10-13  CH2:PD13 CN10-19  AF2"
 #define WIRE_A_TXT         "PB8 CN7-2 ---- PB6  CN10-13  [signal A]"
 #define WIRE_B_TXT         "PB9 CN7-4 ---- PD13 CN10-19  [signal B]"
+
+#elif MCU_ID == 773
+/* NUCLEO-H7S3L8 (UM3276 Tables 11 and 14, AFs from the CubeMX GPIO database).
+ * Generator on PB8/PB9 = D15/D14 on CN7 pins 2/4 (I2C_A, free here). The
+ * encoder goes on TIM1, not TIM4: PB7 is LD3 (red) on this board and PB6 is
+ * the ETH RMII_REF_CLK. TIM1_CH1 = PE9 (D6, CN10-4), TIM1_CH2 = PE11 (D5,
+ * CN10-6), both AF1 - the F446/U575 mapping. */
+#define TIM_QUAD_A_PORT    CA_GPIO_PORT_B  /* PB8 - GPIO output (signal A), CN7 pin 2 */
+#define TIM_QUAD_A_PIN     CA_GPIO_PIN_8
+#define TIM_QUAD_B_PORT    CA_GPIO_PORT_B  /* PB9 - GPIO output (signal B), CN7 pin 4 */
+#define TIM_QUAD_B_PIN     CA_GPIO_PIN_9
+#define TIM_ENC            1U
+#define TIM_ENC_A_PORT     CA_GPIO_PORT_E  /* PE9  - TIM1_CH1 (input A), CN10 pin 4 */
+#define TIM_ENC_A_PIN      CA_GPIO_PIN_9
+#define TIM_ENC_A_AF       1U
+#define TIM_ENC_B_PORT     CA_GPIO_PORT_E  /* PE11 - TIM1_CH2 (input B), CN10 pin 6 */
+#define TIM_ENC_B_PIN      CA_GPIO_PIN_11
+#define TIM_ENC_B_AF       1U
+#define ENC_TXT            "TIM1 CH1:PE9 CN10-4   CH2:PE11 CN10-6  AF1"
+#define WIRE_A_TXT         "PB8 CN7-2 ---- PE9  CN10-4  [signal A]"
+#define WIRE_B_TXT         "PB9 CN7-4 ---- PE11 CN10-6  [signal B]"
 
 #else
 /* Other boards: generator on PB8/PB9, encoder on TIM4 CH1/CH2 (PB6/PB7 AF2),

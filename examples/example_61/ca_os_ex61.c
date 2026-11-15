@@ -34,7 +34,7 @@
 
 #include "caos.h"
 
-/* F1xx and F4xx have no LPTIM at all - not the F407, not the F429, not the
+/* F1xx and F4xx have no LPTIM at all - not the F407, not the F439, not the
  * F446: the peripheral is absent from their CMSIS headers, from RM0390 and from
  * the datasheets, and hw/f{1,4}xx/drivers/lptim_*.c say so in their own header
  * ("stub: LPTIM not present"). They only exist because every family has to
@@ -47,7 +47,7 @@
  * than a part that simply does not have the peripheral. */
 /* Tested on MCU_ID, not on MCU: the family names are not numeric macros, so
  * "MCU == F4xx" compares 0 with 0 and is true for every part. */
-#if MCU_ID == 103 || MCU_ID == 407 || MCU_ID == 429 || MCU_ID == 446
+#if MCU_ID == 103 || MCU_ID == 407 || MCU_ID == 439 || MCU_ID == 446
 #define EX61_NO_LPTIM_HW  1
 #endif
 

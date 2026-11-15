@@ -1,0 +1,65 @@
+// NUCLEO-H7S3L8 (MB1737) on our own STM32H7S3 model (stm32h7s3_caos.repl.in).
+// Console: USART3 (UART_DBG_NUM=3, PD8/PD9 -> ST-LINK VCP).
+using "stm32h7s3_caos.repl"   // simu/gen_platforms.py
+
+// See nucleo_h753.repl: polled SysTick waits end in seconds.
+cpu:
+    PerformanceInMips: 20
+
+// Holes of the memory map: an access is a BusFault, as on silicon (busfault_hole.py).
+
+hole_itcm: Python.PythonPeripheral @ sysbus 0x00010000
+    size: 0x07FF0000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''
+
+hole_flash: Python.PythonPeripheral @ sysbus 0x08010000
+    size: 0x00FEF000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''
+
+hole_sys: Python.PythonPeripheral @ sysbus 0x09000000
+    size: 0x17000000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''
+
+hole_dtcm: Python.PythonPeripheral @ sysbus 0x20010000
+    size: 0x03FF0000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''
+
+hole_axi: Python.PythonPeripheral @ sysbus 0x24072000
+    size: 0x0BF8E000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''
+
+hole_ahb: Python.PythonPeripheral @ sysbus 0x30008000
+    size: 0x087F8000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''
+
+hole_bkp: Python.PythonPeripheral @ sysbus 0x38801000
+    size: 0x077FF000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''
+
+hole_xspi2: Python.PythonPeripheral @ sysbus 0x70200000
+    size: 0x01E00000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''

@@ -162,7 +162,7 @@ if [ $JLINK -eq 1 ]; then
     say "Probe: J-Link (Segger)"
 
     case $MCU in
-        f407*|f429*|f446*)
+        f407*|f439*|f446*)
             # Use openocd for F4xx with J-Link.
             # connect_assert_srst = connect-under-reset: keep the core in reset
             # until the debug port is up. Without it, firmware already on the
@@ -208,6 +208,26 @@ elif [ $STLINK -eq 1 ]; then
             run_prog "$PRG_CLI" \
                 -c port=SWD mode=UR freq=4000 $SN_OPT \
                 -e all \
+                -d "$ELF_FILE" -v -rst
+            ;;
+        h773*)
+            # H7S3: the images run from the Octo-SPI flash on XSPI2 (0x70000000),
+            # written through ST's external loader for this board; only the
+            # trampoline (workspace/app_5) lives in the 64 KB internal flash.
+            # Which one this ELF is: its entry point (e_entry, ELF32 offset 24).
+            ENTRY=$(od -An -tx4 -j24 -N4 "$ELF_FILE" | tr -d ' ')
+            EL_OPT=""
+            case $ENTRY in
+                7*)
+                    EL="$(dirname "$PRG_CLI")/ExternalLoader/MX25UW25645G_NUCLEO-H7S3L8.stldr"
+                    [ -f "$EL" ] || { echo "Error: external loader not found: $EL" >&2; exit 1; }
+                    EL_OPT="-el $EL"
+                    say "XSPI2 image (entry 0x$ENTRY): external loader $(basename "$EL")"
+                    ;;
+            esac
+            run_prog "$PRG_CLI" \
+                -c port=SWD mode=UR freq=4000 $SN_OPT \
+                $EL_OPT \
                 -d "$ELF_FILE" -v -rst
             ;;
         *)

@@ -92,15 +92,26 @@ ca_ipv4_t ca_route_lookup(ca_ipv4_t dst);
  * Drop-in replacement for ca_arp_resolve() across all net services.
  */
 bool ca_net_resolve_mac(ca_ipv4_t dst, ca_mac_t *mac_out, u32 timeout_ms);
+
+/* Same next hop, per packet: non-blocking lookup, confirmation, passive learn */
+bool ca_net_lookup_mac(ca_ipv4_t dst, ca_mac_t *mac_out);
+void ca_net_confirm_mac(ca_ipv4_t dst);
+void ca_net_learn_mac(ca_ipv4_t src, ca_mac_t mac);
 #endif
 
 #else  /* !EN_ROUTE_SERVICE */
 
-/* Fallback when routing is disabled: direct ARP resolve */
+/* Fallback when routing is disabled: on-link or default gateway */
 #if EN_ARP_SERVICE && EN_NET
 #include "arp_service.h"
 #define ca_net_resolve_mac(dst, mac_out, timeout_ms) \
-    ca_arp_resolve((dst), (mac_out), (timeout_ms))
+    ca_arp_resolve(ca_net_proto_next_hop(dst), (mac_out), (timeout_ms))
+#define ca_net_lookup_mac(dst, mac_out) \
+    ca_arp_lookup(ca_net_proto_next_hop(dst), (mac_out))
+#define ca_net_confirm_mac(dst) \
+    ca_arp_confirm(ca_net_proto_next_hop(dst))
+#define ca_net_learn_mac(src, mac) \
+    ca_arp_learn(ca_net_proto_next_hop(src), (mac))
 #endif
 
 #endif /* EN_ROUTE_SERVICE && EN_NET */

@@ -54,6 +54,7 @@ typedef struct ca_mutex_s {
     volatile u32 owner;          // owner's ca_task_handle_t while locked (not a
                                  // thid: a position moves when a task below ends)
     volatile u8 locked;          // 0 = free, 1 = locked
+    volatile u8 owner_died;      // the last owner ended holding it; 0 at unlock
     ca_wait_queue_t wait_queue;      // Tasks waiting
     ca_spinlock_irq_t internal_lock; // Protects internal structure
     struct ca_mutex_s *pi_next;   // next mutex in the owner's pi_held list
@@ -66,6 +67,11 @@ void ca_mutex_pi_refresh(ca_thread_context_t *ctx);
 /** @brief A task leaving a mutex wait list from outside the mutex (removed,
  *         faulted): its boost is taken back from the owner; IRQs masked */
 void ca_mutex_pi_waiter_gone(ca_thread_context_t *ctx);
+
+/** @brief A task that owns mutexes ends without unlocking them (restarted or
+ *         removed, e.g. by a fault): each one goes to its first waiter, or is
+ *         freed. The protected data stays as the task left it; IRQs masked */
+void ca_mutex_owner_gone(ca_thread_context_t *ctx);
 
 /**
  * @brief Initialize mutex
@@ -102,6 +108,15 @@ void ca_mutex_unlock(ca_mutex_t *mtx);
 bool ca_mutex_is_owner(ca_mutex_t *mtx);
 
 /**
+ * @brief True when the mutex the caller just locked was left by an owner that
+ *        ended holding it (restarted or removed, e.g. by a fault)
+ * @param mtx Pointer to the mutex, owned by the caller
+ * @return true if the data it protects may be half-updated: check or rebuild
+ *         it before use. Cleared by the next ca_mutex_unlock()
+ */
+bool ca_mutex_owner_died(const ca_mutex_t *mtx);
+
+/**
  * @brief Acquire mutex with timeout
  * @param mtx Pointer to the mutex
  * @param timeout_ms Timeout in ms (CA_NO_WAIT_TIME = no wait, CA_WAIT_FOREVER = no deadline)
@@ -113,11 +128,12 @@ bool ca_mutex_timedlock(ca_mutex_t *mtx, u32 timeout_ms);
  * RECURSIVE MUTEX (Mutex with reentrancy counter)
  * ========================================================================== */
 
+/* A mutex plus a reentrancy counter: owner, waiters, priority inheritance and
+ * the hand-off when the owner ends all come from the mutex. The counter is
+ * the owner's alone: whoever becomes owner sets it to 1. */
 typedef struct {
-    volatile u32 owner;          // owner's ca_task_handle_t while lock_count > 0
-    volatile u16 lock_count;     // Reentrancy counter (0 = free)
-    ca_wait_queue_t wait_queue;      // Tasks waiting
-    ca_spinlock_irq_t internal_lock; // Protects internal structure
+    ca_mutex_t mtx;              // the lock itself
+    volatile u16 lock_count;     // reentrancy counter, valid while mtx is held
 } ca_recursive_mutex_t;
 
 /**
@@ -168,6 +184,14 @@ bool ca_rmutex_timedlock(ca_recursive_mutex_t *rmtx, u32 timeout_ms);
  * @return Number of locks acquired (0 if free)
  */
 u16 ca_rmutex_get_count(ca_recursive_mutex_t *rmtx);
+
+/**
+ * @brief As ca_mutex_owner_died(), for a recursive mutex the caller holds
+ * @param rmtx Pointer to the recursive mutex
+ * @return true if the previous owner ended holding it; cleared when the
+ *         caller's count goes back to zero
+ */
+bool ca_rmutex_owner_died(const ca_recursive_mutex_t *rmtx);
 
 /* ============================================================================
  * SEMAPHORE (Counting Semaphore)
@@ -308,9 +332,20 @@ u32 ca_critical_nesting_level(void);
 
 #if EN_RWLOCK == 1
 
-typedef struct {
+/* Holders by name, so a task that ends inside a read or write section can be
+ * released: the writer's handle, and one bit per task slot for the readers
+ * (a task holds the read side at most once). A held rwlock is linked in a
+ * list the kernel scans when a task ends. */
+#define CA_RWLOCK_MAP_WORDS  ((MAX_TASK + 31U) / 32U)
+
+typedef struct ca_rwlock_s {
     volatile u16  readers;       /* active readers */
     volatile u8   writer_active; /* writer in progress */
+    volatile u8   owner_died;    /* the last writer ended holding it; 0 at write_unlock */
+    volatile u32  writer;        /* writer's ca_task_handle_t while writer_active */
+    u32           reader_map[CA_RWLOCK_MAP_WORDS]; /* slots holding the read side */
+    struct ca_rwlock_s *held_next; /* list of held rwlocks */
+    u8            listed;        /* in that list */
     ca_wait_queue_t   read_queue;    /* waiting readers */
     ca_wait_queue_t   write_queue;   /* waiting writers */
     ca_spinlock_irq_t internal_lock;
@@ -323,7 +358,9 @@ void ca_rwlock_init(ca_rwlock_t *rw);
 
 /**
  * @brief Acquires read lock (blocks if writer is active or waiting)
- * @note Write-preferring strategy: waiting writers block new readers
+ * @note Write-preferring strategy: waiting writers block new readers. A task
+ *       that already holds the read side must not take it again (safeguard):
+ *       with a writer queued the second read_lock would wait for ever.
  */
 void ca_rwlock_read_lock(ca_rwlock_t *rw);
 
@@ -342,6 +379,18 @@ void ca_rwlock_write_lock(ca_rwlock_t *rw);
  * @note Wakes up waiting writers (priority) or all waiting readers
  */
 void ca_rwlock_write_unlock(ca_rwlock_t *rw);
+
+/**
+ * @brief True when the previous writer ended holding the write side
+ *        (restarted or removed, e.g. by a fault): the data may be
+ *        half-updated. Readers that end change nothing and do not set it.
+ *        Cleared by the next ca_rwlock_write_unlock()
+ */
+bool ca_rwlock_owner_died(const ca_rwlock_t *rw);
+
+/** @brief A task ends: the read and write sides it holds are released, as
+ *         its unlocks would; IRQs masked */
+void ca_rwlock_owner_gone(ca_thread_context_t *ctx);
 
 #endif /* EN_RWLOCK */
 

@@ -39,8 +39,8 @@
 /* ── USB instance per part ────────────────────────────────────────────── */
 #if MCU_ID == 753
 #define USB_NUM      1U    /* OTG_FS (as ex55) */
-#elif MCU_ID == 563 || MCU_ID == 767
-#define USB_NUM      0U    /* H563 USB_DRD_FS / F767 OTG_FS */
+#elif MCU_ID == 563 || MCU_ID == 767 || MCU_ID == 439 || MCU_ID == 773
+#define USB_NUM      0U    /* H563 USB_DRD_FS / F767, F439 OTG_FS / H773 OTG_HS at FS */
 #endif
 
 #if EN_ETH && EN_NET && EN_USB && EN_USB_NCM && defined(USB_NUM)
@@ -56,7 +56,6 @@ static const ca_ipv4_t s_ip  = { .v = { 192U, 168U, 10U, 94U } };
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .v = { 192U, 168U, 10U, 94U } },
     .mac  = { .v = { 0x02U, 0x00U, 0x00U, 0x00U, 0x00U, 0x94U } },
-    .arp  = { .renew_ms = 30000U, .cache_size = 0U },
     .udp  = { .bindings = {{0}}, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -175,6 +174,15 @@ static u32 task_heartbeat(void *arg)
  * ============================================================================ */
 static void eth_gpio_init(void)
 {
+#if MCU_ID == 773
+    /* NUCLEO-H7S3L8 (UM3276 7.13, DS14359 AF11): REF_CLK PB6, MDIO PA2,
+     * MDC PG6, CRS_DV PA7, RXD0/RXD1 PG4/PG5, TX_EN PG11, TXD0/TXD1 PG13/PG12 */
+    static const struct { u8 port; u8 pin; } pins[] = {
+        { CA_GPIO_PORT_B,  6U }, { CA_GPIO_PORT_A,  2U }, { CA_GPIO_PORT_G,  6U },
+        { CA_GPIO_PORT_A,  7U }, { CA_GPIO_PORT_G,  4U }, { CA_GPIO_PORT_G,  5U },
+        { CA_GPIO_PORT_G, 11U }, { CA_GPIO_PORT_G, 13U }, { CA_GPIO_PORT_G, 12U },
+    };
+#else
     static const struct { u8 port; u8 pin; } pins[] = {
         { CA_GPIO_PORT_A,  1U }, { CA_GPIO_PORT_A,  2U }, { CA_GPIO_PORT_A,  7U },
         { CA_GPIO_PORT_C,  1U }, { CA_GPIO_PORT_C,  4U }, { CA_GPIO_PORT_C,  5U },
@@ -186,6 +194,7 @@ static void eth_gpio_init(void)
         { CA_GPIO_PORT_B, 13U },
 #endif
     };
+#endif
     for (u32 i = 0U; i < sizeof(pins)/sizeof(pins[0]); i++) {
         ca_gpio_configure(pins[i].port, pins[i].pin,
             CA_GPIO_MODE_AF, CA_GPIO_OTYPE_PP,

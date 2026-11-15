@@ -60,9 +60,9 @@
 
 #include "caos.h"
 
-#if MCU_ID == 575 || MCU_ID == 753 || MCU_ID == 563
+#if MCU_ID == 575 || MCU_ID == 753 || MCU_ID == 563 || MCU_ID == 773
 /* Defined in hw/<family>/drivers/i2c_<family>.c — transfer diagnostics.
- * Only the I2C v2 families that implement them: u5xx, h7xx and h5xx. */
+ * Only the I2C v2 families that implement them: u5xx, h7xx, h5xx, h7rsxx. */
 #define EX22_DIAG 1
 extern u32 ca_i2c_hw_last_error(u32 *stage);
 extern u32 ca_i2c_hw_slave_probe(u32 *oar1, u32 *cr1, u32 *isr);
@@ -74,7 +74,8 @@ extern u32 ca_i2c_hw_slave_probe(u32 *oar1, u32 *cr1, u32 *isr);
  * two together is why "wire" answered "huh!" on the F446, the one board that
  * needs it most: its driver defaults land on a LED pin. Enabled wherever the
  * pin map below is board-specific. */
-#if MCU_ID == 575 || MCU_ID == 753 || MCU_ID == 563 || MCU_ID == 446 || MCU_ID == 767
+#if MCU_ID == 575 || MCU_ID == 753 || MCU_ID == 563 || MCU_ID == 439 || MCU_ID == 446 || MCU_ID == 767 \
+ || MCU_ID == 773
 #define EX22_WIRE 1
 #endif
 
@@ -135,7 +136,21 @@ extern u32 ca_i2c_hw_slave_probe(u32 *oar1, u32 *cr1, u32 *isr);
 #define WIRE_SCL        "PB8 CN7-2 (master SCL) ---- PF1 CN9-19 (slave SCL)"
 #define WIRE_SDA        "PB9 CN7-4 (master SDA) ---- PF0 CN9-21 (slave SDA)"
 
-#elif MCU_ID == 446 || MCU_ID == 767
+#elif MCU_ID == 773
+/* NUCLEO-H7S3L8 (MB1737), UM3276 Tables 11 and 13: I2C1 PB8/PB9 = I2C_A on
+ * CN7 pins 2/4 (D15/D14), I2C2 PF1/PF0 = I2C_B on CN9 pins 19/21 (D69/D68),
+ * all AF4 (CubeMX GPIO database). The driver default for I2C2 is PB10/PB11,
+ * which this board gives to TIM2 on CN10: the slave uses alternate 1. */
+#define I2C_MASTER      1U
+#define I2C_SLAVE       2U
+#define I2C_MASTER_ALT  0U
+#define I2C_SLAVE_ALT   1U   /* i2c_h7rsxx.c: I2C2 alternate 1 = PF1/PF0 */
+#define MASTER_TXT      "I2C1 SCL:PB8 CN7-2   SDA:PB9 CN7-4"
+#define SLAVE_TXT       "I2C2 SCL:PF1 CN9-19  SDA:PF0 CN9-21"
+#define WIRE_SCL        "PB8 CN7-2 (master SCL) ---- PF1 CN9-19 (slave SCL)"
+#define WIRE_SDA        "PB9 CN7-4 (master SDA) ---- PF0 CN9-21 (slave SDA)"
+
+#elif MCU_ID == 439 || MCU_ID == 446 || MCU_ID == 767
 /* NUCLEO-F446ZE and NUCLEO-F767ZI, both MB1137: same connector layout, so the
  * pins verified against UM1974 Table 18 hold for either part.
  * Same trap as the H563: the F4 driver defaults to I2C1 on PB6/PB7, but on
@@ -360,13 +375,14 @@ static bool user_cli_handler(c_str *pcmd)
               "SCL PF14 CN10-8  -> PF1 CN9-19" },
             { CA_GPIO_PORT_F, CA_GPIO_PIN_15, CA_GPIO_PORT_F, CA_GPIO_PIN_0,
               "SDA PF15 CN10-12 -> PF0 CN9-21" },
-#elif MCU_ID == 563
-            /* H563: I2C1 PB8/PB9 (CN7) -> I2C2 PF1/PF0 (CN9), per UM3115. */
+#elif MCU_ID == 563 || MCU_ID == 773
+            /* H563 and H7S3: I2C1 PB8/PB9 (CN7) -> I2C2 PF1/PF0 (CN9), per
+               UM3115 and UM3276. */
             { CA_GPIO_PORT_B, CA_GPIO_PIN_8, CA_GPIO_PORT_F, CA_GPIO_PIN_1,
               "SCL PB8 CN7-2 -> PF1 CN9-19" },
             { CA_GPIO_PORT_B, CA_GPIO_PIN_9, CA_GPIO_PORT_F, CA_GPIO_PIN_0,
               "SDA PB9 CN7-4 -> PF0 CN9-21" },
-#elif MCU_ID == 446 || MCU_ID == 767
+#elif MCU_ID == 439 || MCU_ID == 446 || MCU_ID == 767
             /* F446 and F767: same layout as the H563, per UM1974 Table 18 -
                both are MB1137 boards. */
             { CA_GPIO_PORT_B, CA_GPIO_PIN_8, CA_GPIO_PORT_F, CA_GPIO_PIN_1,

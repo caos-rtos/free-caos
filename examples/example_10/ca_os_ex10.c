@@ -34,6 +34,11 @@
  *                      Where the hardware has no early interrupt (IWDG on
  *                      F1/F4/F7/H7) the mode must be refused instead:
  *                      "E10: no early warning for <type> here, mode refused"
+ *                      The kernel's last gasp (ca_wdt_last_gasp_arm) also
+ *                      names the task that was running: "E10: last gasp:
+ *                      task '<name>' was running" at the next boot.
+ *   e10 early ... hog  the same, with a task 'e10_hog' keeping the CPU under
+ *                      the scheduler lock: the last gasp must name it
  *   e10 info           reset cause at boot, maxima, driver state
  * The CLI 'reboot' (cli.c) arms the IWDG at 1 ms: it must reset too, and the
  * next boot must say IWDG.
@@ -164,9 +169,19 @@ static void bite(ca_wdt_type_t type, u32 ms)
                  type == CA_WDT_TYPE_IWDG ? "IWDG" : "WWDG", ca_wdt_get_timeout_ms());
 }
 
+/* "e10 early ... hog": a task that keeps the CPU under the scheduler lock,
+ * the classic way to starve a watchdog. The last gasp must name it. */
+static u32 task_hog(void *arg)
+{
+    (void)arg;
+    ca_os_sched_lock();
+    for (;;) { __NOP(); }
+    return 0;
+}
+
 /* "e10 early": the warning first, then the reset - or the mode refused where
  * this watchdog has no early interrupt */
-static void early(ca_wdt_type_t type, u32 ms)
+static void early(ca_wdt_type_t type, u32 ms, bool hog)
 {
     const char *name = type == CA_WDT_TYPE_IWDG ? "IWDG" : "WWDG";
     if (!ca_wdt_early_supported(type)) {
@@ -178,6 +193,8 @@ static void early(ca_wdt_type_t type, u32 ms)
     (void)ca_bkp_write(bkp_mark_idx(), 0U);
     s_early_calls = 0U;
     ca_wdt_on_early(early_cb, (void *)(u32)type);
+    /* and the kernel's own record: which task was running at the warning */
+    if (!ca_wdt_last_gasp_arm()) CLI_PUT_N("E10: last gasp not available here");
     if (!ca_wdt_init(ms, CA_WDT_MODE_INTERRUPT, type)) {
         CLI_PUT_N("e10 early: the watchdog refused this configuration");
         return;
@@ -189,6 +206,11 @@ static void early(ca_wdt_type_t type, u32 ms)
     }
     CLI_PRINTF_N("E10: starving %s with early warning, %u ms - warning, then a reset",
                  name, ca_wdt_get_timeout_ms());
+    if (hog) {
+        ca_os_sleep(20);                /* the line above out before the CPU is taken */
+        (void)ca_os_job("e10_hog", CA_TH_LEVEL3, task_hog, NULL, STACK_SMALL,
+                        CA_JOB_STD, CA_FAULT_ASSERT);
+    }
 }
 
 /* =============================================================================
@@ -198,7 +220,7 @@ static bool ex10_cli_handler(c_str *pcmd)
 {
     const char *p = ca_skip_sp((*pcmd)->data);
     if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("e10       : start | bite iwdg [ms] | bite wwdg | early iwdg [ms] | early wwdg | info");
+        CLI_PUT_N("e10       : start | bite iwdg [ms] | bite wwdg | early iwdg [ms] [hog] | early wwdg [hog] | info");
         return false;
     }
     if (ca_strncmp(p, "e10", 3) != 0) return false;
@@ -232,11 +254,12 @@ static bool ex10_cli_handler(c_str *pcmd)
             u32 ms = 0U;
             while (*p >= '0' && *p <= '9') ms = ms * 10U + (u32)(*p++ - '0');
             if (ms == 0U) ms = E10_BITE_DEF_MS;
-            early(CA_WDT_TYPE_IWDG, ms);
+            early(CA_WDT_TYPE_IWDG, ms, ca_strncmp(ca_skip_sp(p), "hog", 3) == 0);
         } else if (ca_strncmp(p, "wwdg", 4) == 0) {
-            early(CA_WDT_TYPE_WWDG, ca_wdt_max_timeout_ms(CA_WDT_TYPE_WWDG));
+            early(CA_WDT_TYPE_WWDG, ca_wdt_max_timeout_ms(CA_WDT_TYPE_WWDG),
+                  ca_strncmp(ca_skip_sp(p + 4), "hog", 3) == 0);
         } else {
-            CLI_PUT_N("e10 early: iwdg [ms] | wwdg");
+            CLI_PUT_N("e10 early: iwdg [ms] [hog] | wwdg [hog]");
         }
     } else if (ca_strncmp(p, "info", 4) == 0) {
         CLI_PRINTF_N("e10: last reset by watchdog (at boot): %s", s_cause_name[s_boot_cause]);
@@ -247,7 +270,7 @@ static bool ex10_cli_handler(c_str *pcmd)
                      ca_wdt_is_enabled() ? "running" : "not started",
                      ca_wdt_get_timeout_ms(), s_feed ? "on" : "off");
     } else {
-        CLI_PUT_N("e10: start | bite iwdg [ms] | bite wwdg | early iwdg [ms] | early wwdg | info");
+        CLI_PUT_N("e10: start | bite iwdg [ms] | bite wwdg | early iwdg [ms] [hog] | early wwdg [hog] | info");
     }
     return true;
 }
@@ -293,6 +316,13 @@ void ca_os_main(void)
                  ((mark >> 4) & 0xFU) == (u32)CA_WDT_TYPE_IWDG ? "IWDG" : "WWDG", mark & 0xFU);
     else
         PRINTF_N(buf, sizeof(buf), "E10: early warning before the reset: none");
+    {
+        char who[TASK_NAME_LEN + 1];
+        if (ca_wdt_last_gasp(who, sizeof(who)))
+            PRINTF_N(buf, sizeof(buf), "E10: last gasp: task '%s' was running", who);
+        else
+            PRINTF_N(buf, sizeof(buf), "E10: last gasp: none");
+    }
     PRINTF_N(buf, sizeof(buf), "E10: max IWDG %u ms, WWDG %u ms",
              ca_wdt_max_timeout_ms(CA_WDT_TYPE_IWDG), ca_wdt_max_timeout_ms(CA_WDT_TYPE_WWDG));
     PRINTF_N(buf, sizeof(buf), "E10: idle - e10 start | bite | early | info");

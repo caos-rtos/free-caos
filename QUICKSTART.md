@@ -2,37 +2,108 @@
 
 ## 1. Prerequisites
 
-- **Arm GNU Toolchain** (`arm-none-eabi-gcc`) and **CMake** ≥ 3.20 and **make**, on your `PATH`.
-- A programmer for your board (the on-board ST-LINK is enough) and its flashing tool
-  (STM32CubeProgrammer, or openocd).
-- **`STM32_PRG_PATH`** set to the `bin/` directory of STM32CubeProgrammer — the flashing
-  scripts take `STM32_Programmer_CLI` from there and stop with an error when it is not set.
-  Put it in your `~/.bashrc`, e.g.:
+Building and flashing use two different sets of tools. You need the first to build the
+firmware. You need the second only if you have a board; without one, see
+[No board?](#no-board-run-it-on-renode) below.
+
+### Build: compiler, CMake, make
+
+`./bootstrap` and `./do` take `arm-none-eabi-gcc` from your `PATH`, and they also need
+**CMake** ≥ 3.20 and **make**. Use any one of these compilers:
+
+- **From your distribution** (Ubuntu/Debian). The package is `gcc-arm-none-eabi`; it
+  pulls in the C library `libnewlib-arm-none-eabi`:
 
   ```bash
-  export STM32_PRG_PATH=/opt/st/STM32Cube/STM32CubeProgrammer/bin
+  sudo apt install gcc-arm-none-eabi cmake make
   ```
-- Only for the bootloader (`workspace/app_2`): **python3** ≥ 3.6 (standard library only),
-  **OpenSSL** ≥ 1.1.1 to sign the images (`tools/caos_image.py`), **dfu-util** for the
-  USB download. The TFTP client is `tools/caos_tftp`, in the package.
 
-Check the toolchain:
+  Ubuntu 22.04 ships GCC 10.3; the package builds and runs with it.
+- **Arm GNU Toolchain** from
+  [developer.arm.com](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads)
+  (`arm-none-eabi`, x86_64 Linux host). Unpack it and add its `bin/` to `PATH`.
+- **The compiler bundled with STM32CubeIDE**, if you already have the IDE. The libraries
+  of the package are built with it (GCC 13.3). It is **not** in the STM32CubeProgrammer
+  folder: it sits inside the IDE plugins, in a folder whose name carries the version, e.g.
+
+  ```bash
+  export PATH=/opt/st/stm32cubeide_1.19.0/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.linux64_1.0.0.202410170706/tools/bin:$PATH
+  ```
+
+  Look for `*gnu-tools-for-stm32*/tools/bin` under your IDE's `plugins/`.
+
+Check:
 
 ```bash
 arm-none-eabi-gcc --version
 cmake --version
 ```
 
+### Flash a board: STM32CubeProgrammer
+
+The on-board ST-LINK of the NUCLEO is the programmer; the flashing scripts
+(`prog.sh`, the test bench) drive it through **`STM32_Programmer_CLI`**:
+
+- Install **STM32CubeProgrammer** from st.com (a separate download from the IDE). Its
+  default Linux folder is `/opt/st/STM32Cube/STM32CubeProgrammer`, with the command line
+  tool in `bin/`.
+- STM32CubeIDE also contains a copy, inside its plugins:
+  `plugins/com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.linux64_<version>/tools/bin`.
+- Set **`STM32_PRG_PATH`** to that `bin/` folder. The scripts take
+  `STM32_Programmer_CLI` from there, and stop with an error if the variable is not set.
+  Put it in your `~/.bashrc`, e.g.:
+
+  ```bash
+  export STM32_PRG_PATH=/opt/st/STM32Cube/STM32CubeProgrammer/bin
+  ```
+
+openocd works too, by hand: `prog.sh` uses only STM32CubeProgrammer.
+
+### Bootloader only
+
+For `workspace/app_2` you also need:
+- **python3** ≥ 3.6 (standard library only);
+- **OpenSSL** ≥ 1.1.1, to sign the images (`tools/caos_image.py`);
+- **dfu-util**, for the USB download.
+
+The TFTP client is `tools/caos_tftp`, in the package.
+
+### No board? Run it on Renode
+
+The [Renode](https://renode.io) simulator runs the same `.elf` files on a
+simulated NUCLEO, for all seven boards of the FREE edition. The caOS console appears in
+your terminal. You need only the build tools above and Renode, and no STM32CubeProgrammer.
+Installation and use are in **`simu/QUICKSTART.md`**; in short:
+
+```bash
+./bootstrap -m H753 && ./do 2
+simu/run.sh h753 elfs/H753/h753_example_2.elf 5000           # headless, 5 s simulated
+simu/run.sh -i h753 elfs/H753/h753_example_68.elf            # interactive console
+simu/run.sh -i -e f767 elfs/F767/f767_example_35.elf         # + Ethernet to your PC (TAP)
+simu/run.sh -w f767 elfs/F767/f767_example_29.elf 3000 "help;wire"   # + bench jumpers
+simu/test.sh                                                 # the automatic Renode tests
+```
+
+`-e` (Ethernet, on F439/F767/H753) needs root once to create the TAP. The simulation is
+faithful for the kernel, the scheduler, the MPU, faults, timers and the console; the time
+is not real, and USB and most acceleration peripherals are not modelled: the details are
+in `simu/LIMITS.md`.
+
+(Renode is a trademark of Antmicro; caOS is not affiliated with Antmicro and does not
+ship Renode.)
+
 ## 2. Unpack
 
 ```bash
-tar xjf free_caos-free-v0.1.0.tar.bz2
+tar xjf free_caos-free-vX.Y.Z.tar.bz2     # the archive of the release you downloaded
 cd free_caos
 ```
 
+Releases: **https://github.com/caos-rtos/free-caos/releases**.
+
 ## 3. Choose the board and build
 
-The five boards: `F446 F767 H563 H753 U575`.
+The seven boards: `F439 F446 F767 H563 H753 H773 U575` (H773 = NUCLEO-H7S3L8).
 
 ```bash
 ./bootstrap -m H563      # configures for the NUCLEO-H563ZI (writes cpu.cmake)
@@ -63,6 +134,12 @@ With the on-board ST-LINK, through `prog.sh` (it reads the board from `cpu.cmake
 `prog.sh` runs `$STM32_PRG_PATH/STM32_Programmer_CLI` (see Prerequisites). With two or
 more ST-LINK connected it picks the one whose board carries the MCU of the `.elf`. You can also load the `.elf` from your IDE or openocd.
 
+**NUCLEO-H7S3L8 (H773)**: the firmware is linked at `0x70000000` and runs from the
+Octo-SPI flash on XSPI2; `prog.sh` writes it there through the external loader of
+STM32CubeProgrammer. The internal flash holds only the trampoline that sets up XSPI2 and
+jumps to it: flash it **once**, before anything else, with `./prog.sh -s -a 5`. Details,
+recovery and the B2 button in `workspace/app_5/doc/app_5_user_guide_en.md`.
+
 ## 5. Write your own program
 
 Your applications live in `workspace/app_N`, one directory and one firmware each, all
@@ -75,10 +152,10 @@ levels — or copy the template:
 ./new_app.py -t sensor:4 -t logger:2:medium   # the same, without questions
 ./new_app.py -h           # the options of a task: stack, fpu, fault, period
 
-cp -r workspace/app_1 workspace/app_5         # or by hand, to a FREE number:
-# app_2, app_3, app_4 and app_50 are the reference applications of the package
-# edit workspace/app_5/ca_os_app_1.c (rename it ca_os_app_5.c if you like)
-./bootstrap -m H563 && ./do -a 5 && ./prog.sh -s -a 5
+cp -r workspace/app_1 workspace/app_6         # or by hand, to a FREE number:
+# app_2, app_4, app_5 and app_50 are the reference applications of the package
+# edit workspace/app_6/ca_os_app_1.c (rename it ca_os_app_6.c if you like)
+./bootstrap -m H563 && ./do -a 6 && ./prog.sh -s -a 6
 ```
 
 `bootstrap -m` writes the board into `cpu.cmake`, and both `./do` and `prog.sh -a` read
@@ -99,7 +176,22 @@ void ca_os_main(void) {
 }
 ```
 
-The full API is in `include/` and in the manual (`doc/`).
+The full API is in `include/` and in the manual (`doc/`). To look up a function, a
+define or a type without opening the headers:
+
+```bash
+tools/lookup_sym.py ca_os_job            # signature, header, parameters, return, notes, example
+tools/lookup_sym.py --list ca_uart       # every symbol with a prefix
+tools/lookup_sym.py --find queue timeout # symbols whose name or description has all the words
+tools/lookup_qa.py ca_queue_send         # questions and answers: intent, common mistakes
+tools/lookup_qa.py --type error ca_uart_put   # one kind: usage code parameters return error behavior hw_diff
+```
+
+The data is `tools/db/reference.json` (the reference chapter of the manual) and
+`tools/db/caos_qa.jsonl` (Q&A generated with the help of an AI from that reference). When a
+detail matters, the declaration in `include/` is the authority. Some entries document the
+full edition (CAN, USB HS, TAMP, FMAC): if a name is not declared in `include/`, this
+edition does not have it.
 
 ## 6. Debugging without a debugger
 
@@ -186,16 +278,38 @@ $S ./test/run_test.sh -m F767 -n ex84 -t 3   # a single test of a class
 > dedicated port with a point-to-point cable to the NUCLEO, never the port of
 > your office or home LAN.
 
-- `-m <MCU>` is the board of the run (`F446 F767 H563 H753 U575`); the elfs for it
+- `-m <MCU>` is the board of the run (`F439 F446 F767 H563 H753 H773 U575`); the elfs for it
   must already be in `elfs/<MCU>/`.
 - `-n ex<NN>` selects one example's test class; without it the whole suite runs
   (every class whose firmware is present).
 - The console is found automatically from the ST-LINK; set `CAOS_TTY=/dev/ttyACMn`
   if more than one board is connected.
 
+### Every board in one go: `eol.sh`
+
+`./eol.sh` is the end-of-line run: the whole bench on each board, one board at a
+time. For every board it builds the firmware (`./bootstrap -m <MCU>` and `./do`),
+asks you to connect that Nucleo, waits until its ST-LINK shows up (if it does not,
+it tells you to check the cable and looks again), runs the full suite and writes
+the report to `end_of_line/<mcu>_self_test.html` (plus `.xml` and the complete
+`.log`). Then it asks for the next board. A board that is not the one asked for is
+recognised from its Device ID and refused before anything runs.
+
+```bash
+./eol.sh                  # the seven boards, in order
+./eol.sh H753 U575        # only these
+```
+
+Run it as your normal user: it asks for the `sudo` password once, for the network
+classes. On the NUCLEO-H7S3L8 it flashes the trampoline (`workspace/app_5`) first.
+At every prompt, Enter goes on, `s` skips the board, `q` stops.
+
 Some classes need extra hardware or a dedicated test network (a QSPI flash module,
 a point-to-point Ethernet link): those are the examples flagged in **EXAMPLES.md**
 and in their `fail_exNN_info.md`.
+
+The reports of the run made before each release, on all seven boards, are published in
+the repository (`end_of_line/`): compare yours with them.
 
 ## Notes
 

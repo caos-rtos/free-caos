@@ -89,7 +89,8 @@
 #define ETR_TXT        "TIM2_ETR <- PA0 CN10-29  AF14 (NOT AF1 as on H753)"
 #define LED_TXT        "LD1 green PC7 (1 s)   LD2 blue PB7 (20 Hz)"
 
-#elif MCU_ID == 446
+#elif MCU_ID == 446 || MCU_ID == 439
+/* F439ZI: same board, pins (UM1974 Table 17) and AFs (DS9484 Table 12). */
 /* NUCLEO-F446ZE (MB1137).
  * PD0 is CAN_RX/D67 on CN9 pin 25, PA0 is D32 on CN10 pin 29 (UM1974 Table 18).
  * TIM2_ETR is AF1 here, as on the H753: DS stm32f446 Table 11 gives PA0/AF1 as
@@ -148,6 +149,23 @@
 #define GEN_TXT        "TIM3 -> PD0 CN9-25  (GPIO toggle)"
 #define ETR_TXT        "TIM2_ETR <- PA0 CN10-29  AF14"
 #define LED_TXT        "LD1 PB0 / LD2 PF4"
+
+#elif MCU_ID == 773
+/* NUCLEO-H7S3L8 (UM3276 Tables 11, 13 and 14; AFs from the CubeMX GPIO
+ * database of the STM32H7S3L8). PD0 is CAN_RX/D67 on CN9 pin 25 as on the
+ * other Nucleo-144, but PA0 (CN10-29) has NO TIM2_ETR on this part: the ETR
+ * is only on PA5/AF2 or PA15/AF2. PA5 is SPI_A_SCK/D13 on CN7 pin 10 (LD1 is
+ * on PD10 by default, SB50 ON / SB49 OFF, so PA5 is free).
+ * LEDs UM3276 7.5: LD1 green PD10, LD2 yellow PD13. */
+#define GPIO_OUT_PORT  CA_GPIO_PORT_D    /* signal out: PD0 */
+#define GPIO_OUT_PIN   CA_GPIO_PIN_0
+#define GPIO_ETR_PORT  CA_GPIO_PORT_A    /* TIM2_ETR: PA5 AF2 */
+#define GPIO_ETR_PIN   CA_GPIO_PIN_5
+#define GPIO_ETR_AF    2U
+#define WIRE_TXT       "PD0 CN9-25 (TIM3 out) ---- PA5 CN7-10 (TIM2_ETR)"
+#define GEN_TXT        "TIM3 -> PD0 CN9-25  (GPIO toggle)"
+#define ETR_TXT        "TIM2_ETR <- PA5 CN7-10  AF2 (PA0 has no ETR here)"
+#define LED_TXT        "LD1 green PD10 (1 s)   LD2 yellow PD13 (20 Hz)"
 
 #else
 /* Other boards: PD0 -> PA0 is the usual pairing and TIM2_ETR is AF1 on the F

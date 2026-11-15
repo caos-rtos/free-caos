@@ -44,8 +44,8 @@
 
 #include "caos.h"
 
-#if MCU_ID == 575 || MCU_ID == 753 || MCU_ID == 407 || MCU_ID == 446 \
-    || MCU_ID == 767 || MCU_ID == 563
+#if MCU_ID == 575 || MCU_ID == 753 || MCU_ID == 407 || MCU_ID == 439 || MCU_ID == 446 \
+    || MCU_ID == 767 || MCU_ID == 563 || MCU_ID == 773
 #define EX90_OK  (EN_USB && EN_USB_CDC && STDOUT_ON_USB_CDC && ENABLE_CLI)
 #else
 /* example not supported by hardware */

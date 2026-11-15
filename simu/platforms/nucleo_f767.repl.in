@@ -1,0 +1,41 @@
+// NUCLEO-F767ZI (MB1137) on top of Renode's stm32f777 model (RM0410, same die).
+// Console: USART3 (UART_DBG_NUM=3, PD8/PD9 -> ST-LINK VCP).
+using "stm32f777_caos.repl"   // simu/gen_platforms.py
+
+// Real RAM: DTCM 128 KB + SRAM1 368 KB + SRAM2 16 KB = 512 KB contiguous.
+sram:
+    size: 0x80000
+
+// See nucleo_h753.repl: polled SysTick waits end in seconds.
+cpu:
+    cpuType: "cortex-m7"
+    PerformanceInMips: 20
+
+// Holes of the memory map: an access is a BusFault, as on silicon (busfault_hole.py).
+hole_flash: Python.PythonPeripheral @ sysbus 0x08200000
+    size: 0x17D00000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''
+
+hole_ram: Python.PythonPeripheral @ sysbus 0x20080000
+    size: 0x1FF80000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''
+
+hole_fmc: Python.PythonPeripheral @ sysbus 0x60000000
+    size: 0x10000000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''
+
+// IWDG (LSI 32 kHz): missing in stm32f777.repl, so `reboot` (watchdog armed, feed
+// stopped) hung for good. Same block as the F4 one, plus the window register.
+iwdg: Timers.STM32_IndependentWatchdog @ sysbus 0x40003000
+    frequency: 32000
+    windowOption: true
+    defaultPrescaler: 0x4

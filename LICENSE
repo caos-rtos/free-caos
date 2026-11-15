@@ -1,0 +1,22 @@
+caOS FREE edition
+Copyright (c) 2026 Angelo Coppi. All rights reserved.
+
+This is proprietary software, NOT open source. It is distributed free of
+charge for evaluation and non-commercial development, under the End User
+License Agreement in EULA.md, in this same package. By using the software
+you accept that agreement; if you do not accept it, do not use it.
+
+In short (EULA.md is the binding text):
+  - you may build, run and test your own programs against the precompiled
+    caOS libraries on the supported STM32 boards;
+  - you may redistribute this package unmodified, with EULA.md, free of
+    charge, for evaluation;
+  - a commercial product or a production deployment needs a separate
+    commercial licence;
+  - the libraries may not be modified, reverse engineered, or have their
+    edition limits circumvented.
+
+Third-party components (CMSIS, FatFs, Thread-Metric) keep their own
+licences, in their directories under external/.
+
+Commercial licence and questions: caos.rtos@protonmail.com

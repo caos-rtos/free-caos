@@ -10,11 +10,34 @@ Usage:
   sudo python3 modbus_server.py --iface enp7s0 [--pc-ip 192.168.10.1]
   sudo python3 modbus_server.py --iface enp7s0 --no-dhcp  # IP already configured
 
+Fault injection (test bench only; the server is normal until told otherwise):
+  A UDP control socket on 127.0.0.1:5502 (--ctl-port, 0 = off) takes one text
+  command per datagram and answers with one line:
+      ping | status | reset | thaw | disarm | arm <mode>
+  `arm` loads ONE fault that hits the next matching request only and then
+  disarms itself, so a broken phase cannot poison the next ones. Every applied
+  fault is logged as "[FAULT] applied <mode> tid=N fc=0xNN addr=N".
+  `reset` restores the demo register values, freezes the 5 s updater and
+  disarms; `thaw` lets the updater run again. Modes (FC / start address hit):
+      echo_value   FC06 @10   write answer echoes value+1
+      echo_addr    FC06 @10   write answer echoes address+1
+      fc16_addr    FC16 any   write answer echoes address+1
+      fc16_qty     FC16 any   write answer echoes quantity+1
+      unit         FC03 @8    answer carries unit id+1
+      pid          FC03 @8    answer carries protocol id 1
+      partial      FC03 @9    first 4 bytes of the MBAP, then the link is closed
+      stale        FC03 @8    stale-tid answer (data 0xDEAD) + right answer, ONE send
+      len_regs     FC03 @8    MBAP length one more than the byte count (1 pad byte)
+      len_coils    FC01 @8    same for the coil read
+  The addresses are outside the board's own poll cycle (FC03@0, FC06@4,
+  FC16@5, FC01@0), which therefore never consumes a fault by accident.
+
 Dependencies:
   apt install dnsmasq
 """
 
 import argparse
+import atexit
 import os
 import signal
 import socket
@@ -23,6 +46,14 @@ import subprocess
 import sys
 import threading
 import time
+
+# Every log line carries a wall-clock timestamp in milliseconds.
+import builtins as _builtins
+def print(*a, **k):
+    t = time.time()
+    stamp = time.strftime("%H:%M:%S", time.localtime(t)) + ".%03d" % int((t % 1) * 1000)
+    k.setdefault("flush", True)
+    _builtins.print(f"[{stamp}]", *a, **k)
 
 # ---------------------------------------------------------------------------
 # DHCP / network
@@ -68,7 +99,6 @@ def start_dnsmasq(iface, pc_ip):
         f"dhcp-option=option:router,{pc_ip}\n"
         f"dhcp-option=option:dns-server,8.8.8.8\n"
         f"dhcp-option=option:netmask,{MASK}\n"
-        f"log-dhcp\n"
         f"no-resolv\n"
         f"no-hosts\n"
     )
@@ -96,6 +126,12 @@ def start_dnsmasq(iface, pc_ip):
 
     pid = open(DHCP_PID).read().strip()
     print(f"[*] dnsmasq started (pid {pid})")
+    # Stopped on EVERY exit: a dnsmasq that outlived its script once grew its
+    # log to 4.2 GB and filled the root disk (ex44, 28/10)
+    atexit.register(stop_dnsmasq)
+    for _s in (signal.SIGTERM, signal.SIGHUP):
+        if signal.getsignal(_s) == signal.SIG_DFL:
+            signal.signal(_s, lambda n, f: sys.exit(128 + n))
     print(f"[*] DHCP pool {DHCP_START} - {DHCP_END}")
     print(f"[*] DHCP log: tail -f {DHCP_LOG}")
 
@@ -109,7 +145,7 @@ def stop_dnsmasq():
             pass
     else:
         subprocess.run(["pkill", "-f", "dnsmasq-caos43"], stderr=subprocess.DEVNULL)
-    for p in [DHCP_PID, DHCP_CONF]:
+    for p in [DHCP_PID, DHCP_CONF, DHCP_LOG]:
         try: os.remove(p)
         except Exception: pass
 
@@ -216,6 +252,114 @@ def process_pdu(unit_id, pdu):
     return bytes([unit_id]) + resp
 
 # ---------------------------------------------------------------------------
+# Fault injection (one-shot, driven from the control socket)
+# ---------------------------------------------------------------------------
+FAULTS = {
+    #  mode        (fc,   start address or None = any)
+    'echo_value': (0x06, 10),
+    'echo_addr':  (0x06, 10),
+    'fc16_addr':  (0x10, None),
+    'fc16_qty':   (0x10, None),
+    'unit':       (0x03, 8),
+    'pid':        (0x03, 8),
+    'partial':    (0x03, 9),
+    'stale':      (0x03, 8),
+    'len_regs':   (0x03, 8),
+    'len_coils':  (0x01, 8),
+}
+fault_lock = threading.Lock()
+fault_armed = None          # mode name or None
+fault_applied = 0
+updater_frozen = threading.Event()
+
+def take_fault(fc, addr):
+    """Return the armed mode if it targets this request, and disarm it."""
+    global fault_armed, fault_applied
+    with fault_lock:
+        if fault_armed is None:
+            return None
+        want_fc, want_addr = FAULTS[fault_armed]
+        if fc != want_fc or (want_addr is not None and addr != want_addr):
+            return None
+        mode, fault_armed = fault_armed, None
+        fault_applied += 1
+        return mode
+
+def bump16(pdu, off):
+    """Return pdu with the big-endian u16 at `off` incremented by one."""
+    v = (struct.unpack_from('>H', pdu, off)[0] + 1) & 0xFFFF
+    b = bytearray(pdu)
+    struct.pack_into('>H', b, off, v)
+    return bytes(b)
+
+def build_faulty(mode, tid, resp_pdu):
+    """Bytes to put on the wire for the armed fault. resp_pdu = unit+FC+data."""
+    def mbap(t, proto, n):
+        return struct.pack('>HHH', t, proto, n)
+    if mode in ('echo_value', 'fc16_qty'):
+        resp_pdu = bump16(resp_pdu, 4)
+    elif mode in ('echo_addr', 'fc16_addr'):
+        resp_pdu = bump16(resp_pdu, 2)
+    if mode == 'unit':
+        resp_pdu = bytes([(resp_pdu[0] + 1) & 0xFF]) + resp_pdu[1:]
+    if mode == 'pid':
+        return mbap(tid, 1, len(resp_pdu)) + resp_pdu
+    if mode in ('len_regs', 'len_coils'):
+        return mbap(tid, 0, len(resp_pdu) + 1) + resp_pdu + b'\x00'
+    if mode == 'stale':
+        stale = resp_pdu[:3] + b'\xDE\xAD' * ((len(resp_pdu) - 3) // 2)
+        return (mbap((tid - 1) & 0xFFFF, 0, len(stale)) + stale +
+                mbap(tid, 0, len(resp_pdu)) + resp_pdu)
+    return mbap(tid, 0, len(resp_pdu)) + resp_pdu
+
+def control_command(line):
+    global fault_armed
+    words = line.split()
+    cmd = words[0] if words else ''
+    if cmd == 'ping':
+        return 'pong'
+    if cmd == 'status':
+        with fault_lock:
+            return f"armed={fault_armed or 'none'} applied={fault_applied} frozen={int(updater_frozen.is_set())}"
+    if cmd == 'arm' and len(words) == 2 and words[1] in FAULTS:
+        with fault_lock:
+            fault_armed = words[1]
+        print(f"[FAULT] armed {words[1]}", flush=True)
+        return 'OK armed ' + words[1]
+    if cmd == 'disarm':
+        with fault_lock:
+            fault_armed = None
+        print("[FAULT] disarmed", flush=True)
+        return 'OK disarmed'
+    if cmd == 'reset':
+        with fault_lock:
+            fault_armed = None
+        _init_demo_values()
+        updater_frozen.set()
+        print("[FAULT] reset: demo values restored, updater frozen", flush=True)
+        return 'OK reset'
+    if cmd == 'thaw':
+        updater_frozen.clear()
+        return 'OK thawed'
+    return 'ERR unknown command'
+
+def control_loop(port):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.bind(('127.0.0.1', port))
+    except OSError as e:
+        print(f"[!] control socket 127.0.0.1:{port} unavailable: {e}")
+        return
+    print(f"[*] fault control on udp 127.0.0.1:{port}")
+    while True:
+        data, peer = sock.recvfrom(256)
+        try:
+            reply = control_command(data.decode('ascii', 'replace').strip())
+        except Exception as e:
+            reply = f'ERR {e}'
+        sock.sendto(reply.encode(), peer)
+
+# ---------------------------------------------------------------------------
 # Client handler
 # ---------------------------------------------------------------------------
 def handle_client(conn, addr):
@@ -250,6 +394,18 @@ def handle_client(conn, addr):
                 if resp_pdu is None:
                     continue
 
+                addr_req = struct.unpack('>H', pdu_req[1:3])[0] if len(pdu_req) >= 3 else None
+                mode = take_fault(fc, addr_req)
+                if mode is not None:
+                    print(f"[FAULT] applied {mode} tid={tid} fc=0x{fc:02X} addr={addr_req}", flush=True)
+                    wire = build_faulty(mode, tid, resp_pdu)
+                    if mode == 'partial':
+                        conn.sendall(wire[:4])
+                        conn.shutdown(socket.SHUT_RDWR)
+                        return
+                    conn.sendall(wire)
+                    continue
+
                 length_field = len(resp_pdu)
                 mbap = struct.pack('>HHH', tid, 0, length_field)
                 conn.sendall(mbap + resp_pdu)
@@ -267,6 +423,8 @@ def background_updater():
     seq = 0
     while True:
         time.sleep(5)
+        if updater_frozen.is_set():
+            continue
         seq += 1
         for i in range(len(hold_reg)):
             hold_reg[i] = (hold_reg[i] + 1) % 65536
@@ -283,6 +441,8 @@ def main():
     parser.add_argument('--pc-ip',   default='192.168.10.1', help='PC IP on the link')
     parser.add_argument('--port',    type=int, default=502)
     parser.add_argument('--no-dhcp', action='store_true',    help='skip DHCP/IP setup')
+    parser.add_argument('--ctl-port', type=int, default=5502,
+                        help='UDP fault-control port on 127.0.0.1 (0 = off)')
     args = parser.parse_args()
 
     if os.geteuid() != 0:
@@ -311,6 +471,9 @@ def main():
 
     upd = threading.Thread(target=background_updater, daemon=True)
     upd.start()
+    if args.ctl_port:
+        threading.Thread(target=control_loop, args=(args.ctl_port,),
+                         daemon=True).start()
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

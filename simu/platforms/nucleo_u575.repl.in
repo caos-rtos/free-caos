@@ -1,0 +1,36 @@
+// NUCLEO-U575ZI-Q (MB1549) on our own STM32U575 model (stm32u575_caos.repl.in).
+// Console: USART1 (UART_DBG_NUM=1, PA9/PA10 -> ST-LINK VCP).
+using "stm32u575_caos.repl"   // simu/gen_platforms.py
+
+// See nucleo_h753.repl: polled SysTick waits end in seconds.
+cpu:
+    PerformanceInMips: 20
+
+// Holes of the memory map: an access is a BusFault, as on silicon (busfault_hole.py).
+hole_null: Python.PythonPeripheral @ sysbus 0x00000000
+    size: 0x08000000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''
+
+hole_flash: Python.PythonPeripheral @ sysbus 0x08200000
+    size: 0x03D90000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''
+
+hole_ram: Python.PythonPeripheral @ sysbus 0x200C0000
+    size: 0x07F40000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''
+
+hole_ram4: Python.PythonPeripheral @ sysbus 0x28004000
+    size: 0x07FFC000
+    initable: true
+    script: '''
+@inline(busfault_hole.py)
+'''

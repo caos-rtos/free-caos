@@ -10,7 +10,7 @@
  ******************************************************************************
  * @details
  * Every family routes the LSE (32768 Hz crystal) to one timer input for
- * calibration: TIM16 CH1 on U575/H563/H753, TIM5 CH4 on F446/F767. The timer
+ * calibration: TIM16 CH1 on U575/H563/H753, TIM5 CH4 on F407/F439/F446/F767. The timer
  * captures one rising edge every 8 and the callback adds up the ticks.
  *
  *   capture test   1 s of captures: the count must be ~4096 and the measured
@@ -31,14 +31,31 @@
 #if MCU_ID == 575 || MCU_ID == 563 || MCU_ID == 753
 #define IC_TIM      16U
 #define IC_CH       1U
-#elif MCU_ID == 446 || MCU_ID == 767
+#elif MCU_ID == 407 || MCU_ID == 439 || MCU_ID == 446 || MCU_ID == 767
 #define IC_TIM      5U
 #define IC_CH       4U
+#elif MCU_ID == 773
+/* H7Rx/7Sx: no LSE input on TIM16; LSE -> MCO1 -> TIM15 CH1 (timer_h7rsxx.c) */
+#define IC_TIM      15U
+#define IC_CH       1U
 #endif
 
+/* Capture prescaler: 8 LSE periods between captures must stay under the
+ * 16-bit counter. At 240 MHz (H753) that is 58593 counts; at 300 MHz (H773,
+ * TIM15 on APB2 x2) it would be 73242 and wrap - /4 there. */
+#if MCU_ID == 773
+#define IC_DIV      4U
+#else
 #define IC_DIV      8U
+#endif
 #define IC_NO_ROUTE 2U          /* TIM2 CH1: no internal LSE route on any family */
 #define LSE_HZ      32768U
+/* Known FAIL on the bench NUCLEO-H753ZI, left on purpose: its HSE is the
+ * ST-LINK-V3E MCO (UM2407 7.5.1, SB45 ON, X3 not fitted) and that clock is
+ * off: -479 ppm on 2026-10-24, -4400..-5000 ppm and drifting on 2026-10-29,
+ * same with another cable, USB port and after a power cycle. uptime vs PC
+ * confirmed the CPU is the fast one (+4700 ppm), the LSE is good. The
+ * limit is not widened: the test reports a real board defect. */
 #define PPM_TOL     1000
 
 static volatile u32 s_ic_count;

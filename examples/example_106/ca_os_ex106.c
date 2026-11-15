@@ -297,6 +297,25 @@ static void ex106_bench(void)
                  c_in, c_enc, e ? "" : " (failed)", c_dec, d ? "" : " (failed)", c_out);
     CLI_PRINTF_N("JPG   per pixel: rgb->mcu %u  encode %u  decode %u  mcu->rgb %u",
                  c_in / px, c_enc / px, c_dec / px, c_out / px);
+
+    /* Fingerprint of the two software conversions over every subsampling and
+     * a size that is not a whole number of MCUs (edge columns and rows): a
+     * faster conversion must print the same value. FNV-1a over both outputs. */
+    u32 hsh = 2166136261U;
+    static const u16 sz[2][2] = { { IMG_W, IMG_H }, { IMG_W - 3U, IMG_H - 3U } };
+    for (u32 s = 0U; s < 2U; s++)
+        for (u32 c = 0U; c <= (u32)CA_JPEG_420; c++) {
+            const u16 w = sz[s][0], h = sz[s][1];
+            ca_jpeg_info_t gi;
+            if (!ca_jpeg_geometry(w, h, (ca_jpeg_css_t)c, &gi)) continue;
+            ex106_image(w, h, (ca_jpeg_css_t)c);
+            ca_jpeg_rgb_to_mcu(s_img, w, h, (ca_jpeg_css_t)c, s_mcu);
+            ca_jpeg_mcu_to_rgb(s_mcu, w, h, (ca_jpeg_css_t)c, s_back);
+            const u32 nb = (c == (u32)CA_JPEG_GRAY ? 1U : 3U) * w * h;
+            for (u32 i = 0U; i < gi.mcu_bytes; i++) hsh = (hsh ^ s_mcu[i]) * 16777619U;
+            for (u32 i = 0U; i < nb; i++) hsh = (hsh ^ s_back[i]) * 16777619U;
+        }
+    CLI_PRINTF_N("JPG   conv hash %08X", hsh);
 }
 
 #if ENABLE_CLI

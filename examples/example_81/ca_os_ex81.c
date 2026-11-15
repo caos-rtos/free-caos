@@ -48,11 +48,14 @@
 #elif MCU_ID == 753
 #define USB_NUM      1U    /* OTG_FS CN14 without ULPI — change to 0 if ULPI is available */
 
-#elif MCU_ID == 407 || MCU_ID == 446 || MCU_ID == 767
+#elif MCU_ID == 407 || MCU_ID == 439 || MCU_ID == 446 || MCU_ID == 767
 #define USB_NUM      0U
 
 #elif MCU_ID == 563
 #define USB_NUM      0U          /* USB_DRD_FS — single instance H563 */
+
+#elif MCU_ID == 773
+#define USB_NUM      0U          /* OTG_HS, integrated HS PHY run at FS (Type-C CN2) */
 
 #else
 /* example not supported by hardware */
@@ -202,7 +205,6 @@ static ca_udp_server_cfg_t srv_cfg = {
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .addr = 0U },
     .mac  = { .v = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x81U } },
-    .arp  = { .renew_ms = 30000U },
     .udp  = { .bindings = { {0U, NULL} }, .count = 0U },
     .icmp = { .echo_reply = true },
 };

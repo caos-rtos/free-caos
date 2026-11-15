@@ -20,6 +20,9 @@
  *        - automatically reconnects after disconnection
  *   4. ICMP echo reply (ping from the board)
  *   5. Diagnostics via CLI: "eth pool" | "mqtt stat" | "tcp list"
+ *   6. Bench control via CLI (hw_test, fault phases): "mqx cycle|conn|disc|auto"
+ *      - drive connect/disconnect by hand; any of them (except auto) holds
+ *        the automatic reconnect of task_mqtt until "mqx auto"
  *
  * PC Server: start mqtt_server.py in the example directory.
  *   sudo python3 mqtt_server.py --iface enp7s0
@@ -135,6 +138,68 @@ static void on_mqtt_disconnected(void)
 }
 
 /* ============================================================================
+ * Bench control: "mqx" (connect/disconnect on command)
+ *
+ * The built-in "mqtt" command has stat/pub/disc but no connect, and task_mqtt
+ * reconnects by itself every MQTT_RECONNECT_MS. The bench needs the opposite
+ * for its fault phases (disconnect while a connect is pending, 20 fast
+ * reconnect cycles): so these commands HOLD the automatic reconnect until
+ * "mqx auto". Output lines start with "MQX ".
+ * ============================================================================ */
+static volatile bool s_mqx_hold = false;
+
+#if ENABLE_CLI
+static void mqx_restart(bool drop_old)
+{
+    ca_ipv4_t broker_ip = s_gw;
+    ca_ipv4_t local_ip  = s_ip;
+
+    /* The disconnect of the old session, if any, is printed by the callbacks
+     * BEFORE the marker below: the bench counts what follows the marker. */
+    if (drop_old) ca_mqtt_disconnect();
+    ca_mqtt_service_init(broker_ip, MQTT_BROKER_PORT, local_ip, s_mac,
+                         MQTT_CLIENT_ID, on_mqtt_connected, on_mqtt_message,
+                         on_mqtt_disconnected);
+    ca_stdout_put_n("MQX connecting");
+    if (!ca_mqtt_service_net_ready()) ca_stdout_put_n("MQX connect refused");
+}
+
+static void mqx_usage(void)
+{
+    CLI_PUT_N("mqx       : cycle | conn | disc | auto   - bench control of the MQTT session");
+}
+
+static bool mqx_cli(c_str *pcmd)
+{
+    const char *p = ca_skip_sp((*pcmd)->data);
+    if (ca_strncmp(p, "help", 4) == 0) { mqx_usage(); return false; }
+    if (ca_strncmp(p, "mqx", 3) != 0) return false;
+    p = ca_skip_sp(p + 3);
+
+    if (ca_strncmp(p, "auto", 4) == 0) {
+        s_mqx_hold = false;
+        CLI_PUT_N("MQX auto reconnect on");
+    } else if (ca_strncmp(p, "cycle", 5) == 0) {
+        s_mqx_hold = true;
+        mqx_restart(true);
+    } else if (ca_strncmp(p, "conn", 4) == 0) {
+        s_mqx_hold = true;
+        mqx_restart(false);
+    } else if (ca_strncmp(p, "disc", 4) == 0) {
+        s_mqx_hold = true;
+        ca_mqtt_disconnect();
+        CLI_PUT_N("MQX disconnect issued");
+    } else {
+        mqx_usage();
+    }
+    return true;
+}
+
+static ca_cli_node_t s_mqx_node = { mqx_cli, NULL };
+static bool          s_mqx_registered = false;
+#endif /* ENABLE_CLI */
+
+/* ============================================================================
  * DHCP UDP handler (port 68)
  * ============================================================================ */
 static void dhcp_udp_handler(u16 buf_idx)
@@ -189,7 +254,6 @@ static void on_link_change(bool up)
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .addr = 0U },
     .mac  = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x42U } },
-    .arp  = { .renew_ms = 30000U },
     .udp  = { .bindings = { {0U, NULL} }, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -252,6 +316,14 @@ static u32 task_mqtt(void *arg)
                          on_mqtt_message,
                          on_mqtt_disconnected);
 
+#if ENABLE_CLI
+    /* Registered after the service's own "mqtt" node, so it sits first in the
+     * chain and its help line is printed too. */
+    if (!s_mqx_registered) {
+        ca_cli_register(&s_mqx_node);
+        s_mqx_registered = true;
+    }
+#endif
     ca_stdout_put_n("MQTT: starting connection...");
     ca_mqtt_service_net_ready();
 
@@ -264,7 +336,7 @@ static u32 task_mqtt(void *arg)
         u32 now = ca_os_tick_ms();
 
         if (!ca_mqtt_is_connected()) {
-            if ((now - last_reconnect) >= MQTT_RECONNECT_MS) {
+            if (!s_mqx_hold && (now - last_reconnect) >= MQTT_RECONNECT_MS) {
                 last_reconnect = now;
                 ca_stdout_put_n("MQTT: reconnect attempt...");
                 /* update local IP in case of DHCP renewal */
@@ -322,7 +394,7 @@ static u32 task_eth_mon(void *arg)
     return 0U;
 }
 
-/* Stats/pool/leak diagnostics: available on request via CLI "eth stats" |
+/* Stats/pool/leak diagnostics: available on request via CLI "ip stats" |
  * "eth pool" | "eth dump" | "mqtt stat" - no periodic task here. */
 
 /* ============================================================================
@@ -330,6 +402,15 @@ static u32 task_eth_mon(void *arg)
  * ============================================================================ */
 static void eth_gpio_init(void)
 {
+#if MCU_ID == 773
+    /* NUCLEO-H7S3L8 (UM3276 7.13, DS14359 AF11): REF_CLK PB6, MDIO PA2,
+     * MDC PG6, CRS_DV PA7, RXD0/RXD1 PG4/PG5, TX_EN PG11, TXD0/TXD1 PG13/PG12 */
+    static const struct { u8 port; u8 pin; } pins[] = {
+        { CA_GPIO_PORT_B,  6U }, { CA_GPIO_PORT_A,  2U }, { CA_GPIO_PORT_G,  6U },
+        { CA_GPIO_PORT_A,  7U }, { CA_GPIO_PORT_G,  4U }, { CA_GPIO_PORT_G,  5U },
+        { CA_GPIO_PORT_G, 11U }, { CA_GPIO_PORT_G, 13U }, { CA_GPIO_PORT_G, 12U },
+    };
+#else
     static const struct { u8 port; u8 pin; } pins[] = {
         { CA_GPIO_PORT_A,  1U }, { CA_GPIO_PORT_A,  2U }, { CA_GPIO_PORT_A,  7U },
         { CA_GPIO_PORT_C,  1U }, { CA_GPIO_PORT_C,  4U }, { CA_GPIO_PORT_C,  5U },
@@ -345,6 +426,7 @@ static void eth_gpio_init(void)
         { CA_GPIO_PORT_B, 13U },
 #endif
     };
+#endif
     for (u32 i = 0U; i < sizeof(pins)/sizeof(pins[0]); i++) {
         ca_gpio_configure(pins[i].port, pins[i].pin,
             CA_GPIO_MODE_AF, CA_GPIO_OTYPE_PP,

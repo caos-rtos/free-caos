@@ -1,0 +1,17 @@
+# Board fixups applied after LoadELF (run.sh includes nucleo_<board>.resc).
+# Factory calibration (system memory) reads 0 in Renode: ca_temp_hw_convert()
+# divides by TS_CAL2-TS_CAL1 -> DIVBYZERO in the banner task. Values chosen so
+# that the ADC stub's fixed DR (0x8000) reads ~25 C.
+sysbus WriteWord 0x1FF1E820 25000   # TS_CAL1 (30 C)
+sysbus WriteWord 0x1FF1E840 28400   # TS_CAL2 (110 C)
+sysbus WriteWord 0x1FF1E860 24800   # VREFINT_CAL
+
+# Known accesses with no model, harmless: ST SystemInit reads the DBGMCU IDCODE
+# (revision check) and writes the AXI GPV (errata workaround). Silent tags keep
+# them out of the unmapped-access summary.
+sysbus Tag <0x5C001000, 0x5C001003> "DBGMCU_IDCODE" 0x20036450 false true
+sysbus Tag <0x51008108, 0x5100810B> "AXI_GPV_TARG7_FN_MOD" 0 false true
+# Reset vector: the image is linked and loaded at 0x08000000, but at 0x00000000 the
+# model maps nothing (or an empty RAM). LoadELF sets SP/PC for the first boot only:
+# without this every software reset fetched SP=0/PC=0 (simu/CHANGES.md 27).
+cpu InitVectorTableOffset 0x08000000

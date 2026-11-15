@@ -76,12 +76,16 @@ const u8 ca_ssh_authorized_pub[ED25519_PUBLIC_SIZE] = {
 #define USB_NUM      1U    /* OTG_FS CN14 without ULPI — change to 0 if ULPI is available */
 #define SSH_TASK_STACK STACK_LARGE
 
-#elif MCU_ID == 407 || MCU_ID == 446 || MCU_ID == 767
+#elif MCU_ID == 407 || MCU_ID == 439 || MCU_ID == 446 || MCU_ID == 767
 #define USB_NUM      0U
 #define SSH_TASK_STACK (STACK_XLARGE+STACK_MEDIUM)   /* F4xx: extra headroom */
 
 #elif MCU_ID == 563
 #define USB_NUM      0U    /* USB_DRD_FS — single instance H563 */
+#define SSH_TASK_STACK STACK_LARGE
+
+#elif MCU_ID == 773
+#define USB_NUM      0U          /* OTG_HS, integrated HS PHY run at FS (Type-C CN2) */
 #define SSH_TASK_STACK STACK_LARGE
 
 #else
@@ -115,7 +119,6 @@ static const ca_ipv4_t s_ip = { .v = { 192U, 168U, 10U, 83U } };
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .v = { 192U, 168U, 10U, 83U } },
     .mac  = { .v = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x83U } },
-    .arp  = { .renew_ms = 30000U, .cache_size = 0U },
     .udp  = { .bindings = {{0}}, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -167,6 +170,9 @@ static u32 task_net(void *arg)
      * stayed invisible until the bench compared EN_CLI_ARP against the
      * help. Static IP, so it is passed in directly. */
     ca_arp_service_init(net_cfg.mac, s_ip);
+    /* and its task: without it ca_arp_resolve() never gets an answer, so
+     * the board could not reach a host that had not talked to it first */
+    ca_arp_service_start();
 
 
     /* TCP service can start right away: it puts nothing on the wire until

@@ -12,11 +12,16 @@ Usage:
   python3 http_test.py --no-dhcp --board-ip 192.168.10.158 --cmd "top"
       Runs a single CLI command via POST and prints the answer (no browser)
 
+  python3 http_test.py --board-ip 192.168.10.158 --strict all [--transport http|https|both]
+      Raw-socket strict phases (http_strict.py, tls_strict.py), used by the
+      bench; --strict list prints the phase names. No DHCP, no browser.
+
 Dependencies:
   apt install dnsmasq
 """
 
 import argparse
+import atexit
 import os
 import signal
 import subprocess
@@ -80,7 +85,6 @@ def start_dhcp(iface, pc_ip):
         f"dhcp-range={DHCP_START},{DHCP_END},{MASK},120s\n"
         f"dhcp-option=3,{pc_ip}\n"          # gateway = PC
         f"dhcp-option=6,{pc_ip}\n"          # DNS = PC
-        f"log-dhcp\n"
         f"log-facility={DHCP_LOG}\n"
         f"pid-file={DHCP_PID}\n"
         f"no-resolv\n"
@@ -110,9 +114,12 @@ def stop_dhcp():
         except subprocess.TimeoutExpired:
             _dnsmasq_proc.kill()
         _dnsmasq_proc = None
-    # safety killall
-    subprocess.run(["killall", "-q", "dnsmasq"], stderr=subprocess.DEVNULL)
-    for f in (DHCP_CONF, DHCP_PID):
+    # Only this script's dnsmasq: the 'killall dnsmasq' that was here also
+    # killed the test bench's and the system's
+    subprocess.run(["pkill", "-f", "dnsmasq-caos45"], stderr=subprocess.DEVNULL)
+    # The log too: a dnsmasq that outlived its script once grew its log to
+    # 4.2 GB and filled the root disk (ex44, 28/10)
+    for f in (DHCP_CONF, DHCP_PID, DHCP_LOG):
         try:
             os.remove(f)
         except FileNotFoundError:
@@ -215,7 +222,29 @@ def main():
                     help="run a single CLI command and print the answer (no browser)")
     ap.add_argument("--no-browser", action="store_true",
                     help="do not open a browser, use the interactive CLI")
+    ap.add_argument("--strict", metavar="PHASE", default=None,
+                    help="run strict raw-socket phases ('all', 'list' or names, "
+                         "comma separated) against --board-ip and exit")
+    ap.add_argument("--transport", choices=["http", "https", "both"], default="both",
+                    help="transport of the --strict HTTP phases (default both)")
+    ap.add_argument("--http-port",  type=int, default=80)
+    ap.add_argument("--https-port", type=int, default=443)
     args = ap.parse_args()
+
+    # -- Strict phases: raw sockets, nothing else of this script runs ------
+    if args.strict:
+        import http_strict
+        import tls_strict
+        if args.strict == "list":
+            print(" ".join([n for n, _ in http_strict.HTTP_PHASES] +
+                           [n for n, _ in tls_strict.TLS_PHASES]))
+            return
+        if not args.board_ip:
+            print("ERROR: --strict needs --board-ip")
+            sys.exit(2)
+        kinds = ["http", "https"] if args.transport == "both" else [args.transport]
+        sys.exit(http_strict.run(args.board_ip, args.strict.split(","), kinds,
+                                 args.http_port, args.https_port))
 
     # -- Determine the board IP -------------------------------------------
     board_ip = args.board_ip
@@ -234,6 +263,8 @@ def main():
 
         signal.signal(signal.SIGINT,  _cleanup)
         signal.signal(signal.SIGTERM, _cleanup)
+        signal.signal(signal.SIGHUP,  _cleanup)     # terminal closed
+        atexit.register(stop_dhcp)                 # every other exit path
 
         if not board_ip:
             board_ip = wait_board_ip(BOARD_MAC)

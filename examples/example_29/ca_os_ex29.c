@@ -119,12 +119,14 @@
  * the mistake was invisible because the code compiled and ran and only the
  * wire test disagreed. A board added later must state which pin its CN7-14
  * carries, and the compiler is the one that asks. */
-#if   MCU_ID == 753 || MCU_ID == 563 || MCU_ID == 747
-  /* Ethernet PHY fitted: PA7 is RMII_CRS_DV, so SB121/SB122 move D11 to PB5. */
+#if   MCU_ID == 753 || MCU_ID == 563 || MCU_ID == 747 || MCU_ID == 773
+  /* Ethernet PHY fitted: PA7 is RMII_CRS_DV, so SB121/SB122 move D11 to PB5.
+   * H7S3: D11 is PB5 "SPI_A_MOSI" on CN7-14 (UM3276 Table 11), PA7 goes to
+   * the PHY (SB59 ON, Table 10). */
   #define MOSI_PORT     CA_GPIO_PORT_B
   #define MOSI_PIN      CA_GPIO_PIN_5
   #define MOSI_TXT      "PB5"
-#elif MCU_ID == 575 || MCU_ID == 446 || MCU_ID == 767
+#elif MCU_ID == 575 || MCU_ID == 439 || MCU_ID == 446 || MCU_ID == 767
   /* CN7-14 keeps the factory default of UM1974 Table 12 (SB121 ON): PA7.
    *
    * The F767ZI has the Ethernet PHY and it is tempting to group it with

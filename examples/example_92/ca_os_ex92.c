@@ -68,8 +68,9 @@
 #define EX92_SCK_HZ   8000000U     /* default: flying wires, keep it low     */
 
 /* Kernel clock of the QSPI/OCTOSPI: HCLK, which is the core clock except on
- * H7, where the QUADSPI runs from rcc_hclk3 = core / 2. */
-#if (MCU_ID == 753) || (MCU_ID == 747)
+ * H7, where the QUADSPI runs from rcc_hclk3 = core / 2, and on H7Rx/7Sx, where
+ * XSPI1 runs from hclk5 = core / 2 (CCIPR1.XSPI1SEL reset value). */
+#if (MCU_ID == 753) || (MCU_ID == 747) || (MCU_ID == 773)
 #define EX92_KER_HZ   (SystemCoreClock / 2U)
 #else
 #define EX92_KER_HZ   (SystemCoreClock)
@@ -466,9 +467,86 @@ static u32 task_ex92(void *arg)
     return 0;
 }
 
+/* ---- "e92 xspeed" (H773 only): how fast can the CODE flash on XSPI2 go? ----
+ * The image runs from XSPI2 at hclk5/4 = 75 MHz, set by the trampoline. This
+ * raises the prescaler for a moment and reads the start of the image back:
+ * READ ONLY, nothing is ever written to the flash. It runs from RAM
+ * (.RamFunc) with the interrupts off, because the code flash itself is the
+ * thing under test; the trampoline's memory-mapped DTR setup (CR/CCR/TCR/IR)
+ * is saved and written back around the change, as the trampoline does. A
+ * speed that does not hold gives a different CRC - or at worst a hang that a
+ * reset clears, since the trampoline reprograms XSPI2 on every boot. Never
+ * kernel/1 (300 MHz): beyond the MX25UW25645G (200 MHz DTR). */
+#if MCU_ID == 773
+#define EX92_XS_BASE   0x70000000UL
+#define EX92_XS_WORDS  (512U * 1024U / 4U)
+
+__attribute__((section(".RamFunc"), noinline))
+static u32 ex92_xs_crc(const volatile u32 *a, u32 n)
+{
+    u32 c = 0xFFFFFFFFUL;
+    for (u32 i = 0U; i < n; i++) {
+        c ^= a[i];
+        for (u32 b = 0U; b < 32U; b++) c = (c >> 1) ^ (0xEDB88320UL & (0U - (c & 1U)));
+    }
+    return ~c;
+}
+
+__attribute__((section(".RamFunc"), noinline))
+static void ex92_xs_presc(u32 presc)
+{
+    const u32 cr = XSPI2->CR, ccr = XSPI2->CCR, tcr = XSPI2->TCR, ir = XSPI2->IR;
+    XSPI2->CR |= XSPI_CR_ABORT;
+    while (XSPI2->CR & XSPI_CR_ABORT) { }
+    while (XSPI2->SR & XSPI_SR_BUSY) { }
+    XSPI2->CR  = cr & ~(XSPI_CR_EN | XSPI_CR_ABORT);
+    XSPI2->DCR2 = (XSPI2->DCR2 & ~XSPI_DCR2_PRESCALER_Msk) | (presc << XSPI_DCR2_PRESCALER_Pos);
+    XSPI2->CR  = cr & ~XSPI_CR_ABORT;
+    XSPI2->CCR = ccr;
+    XSPI2->TCR = tcr;
+    XSPI2->IR  = ir;
+    __DSB(); __ISB();
+}
+
+/* three reads at 'presc', CRCs in c[0..2]; back to the running prescaler */
+__attribute__((section(".RamFunc"), noinline))
+static void ex92_xs_run(u32 presc, u32 c[3])
+{
+    const u32 old = (XSPI2->DCR2 & XSPI_DCR2_PRESCALER_Msk) >> XSPI_DCR2_PRESCALER_Pos;
+    ex92_xs_presc(presc);
+    for (u32 k = 0U; k < 3U; k++) c[k] = ex92_xs_crc((const volatile u32 *)EX92_XS_BASE, EX92_XS_WORDS);
+    ex92_xs_presc(old);
+}
+
+static void ex92_xspeed(void)
+{
+    const u32 ker = ca_os_clock_get_freq() / 2U;          /* hclk5 = SYSCLK / 2 */
+    const u32 run = (XSPI2->DCR2 & XSPI_DCR2_PRESCALER_Msk) >> XSPI_DCR2_PRESCALER_Pos;
+    static const u32 presc[] = { 2U, 1U };                /* DCR2 value = divider - 1: /3 100, /2 150 MHz at hclk5 300 */
+    u32 ref[3], c[3];
+    __disable_irq();
+    ex92_xs_run(run, ref);
+    __enable_irq();
+    CLI_PRINTF_N("XS  ref  presc %u  %u MHz  crc %08X %08X %08X  (%u KB)", run + 1U,
+                 ker / (run + 1U) / 1000000U, ref[0], ref[1], ref[2], (u32)(EX92_XS_WORDS * 4U / 1024U));
+    for (u32 i = 0U; i < sizeof(presc) / sizeof(presc[0]); i++) {
+        __disable_irq();
+        ex92_xs_run(presc[i], c);
+        __enable_irq();
+        const bool ok = (c[0] == ref[0]) && (c[1] == ref[0]) && (c[2] == ref[0]);
+        CLI_PRINTF_N("XS  test presc %u  %u MHz  crc %08X %08X %08X  %s", presc[i] + 1U,
+                     ker / (presc[i] + 1U) / 1000000U, c[0], c[1], c[2], ok ? "OK" : "FAIL");
+    }
+}
+#endif /* MCU_ID == 773 */
+
 /* ---- CLI "e92" ---- */
 #if ENABLE_CLI
+#if MCU_ID == 773
+#define EX92_HELP "e92       : start | write | read | wire | sweep | bench | clk <MHz> | shift auto|on|off | dump [addr hex] | info | xspeed"
+#else
 #define EX92_HELP "e92       : start | write | read | wire | sweep | bench | clk <MHz> | shift auto|on|off | dump [addr hex] | info"
+#endif
 
 static bool ex92_cli_handler(c_str *pcmd)
 {
@@ -492,6 +570,9 @@ static bool ex92_cli_handler(c_str *pcmd)
         return true;
     }
 
+#if MCU_ID == 773
+    if (ca_strncmp(p, "xspeed", 6) == 0) { ex92_xspeed(); return true; }
+#endif
     if (ca_strncmp(p, "clk", 3) == 0) {
         p = ca_skip_sp(p + 3);
         const u32 mhz = (u32)ca_strtol(p, 10);

@@ -20,7 +20,7 @@
  *      It used to loop every 30 s from boot: the bench waited ~29 s for a
  *      cycle to come round and counted events in time windows (04/10).
  *   5. ICMP echo reply (ping from the board)
- *   6. Diagnostics via CLI: "eth pool" | "eth stats" | "tcp list"
+ *   6. Diagnostics via CLI: "eth pool" | "ip stats" | "tcp list"
  *      "e40 start | info"
  *
  * PC Server: start tcp_server.py in the example directory.
@@ -150,7 +150,6 @@ static void on_link_change(bool up)
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .addr = 0U },
     .mac  = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x40U } },
-    .arp  = { .renew_ms = 30000U },
     .udp  = { .bindings = { {0U, NULL} }, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -294,8 +293,8 @@ static u32 task_eth_mon(void *arg)
     return 0U;
 }
 
-/* Stats/pool/leak diagnostics: available on request via CLI "eth stats" |
- * "eth pool" | "eth dump" (caos/drivers/src/eth.c) - no periodic task here. */
+/* Stats/pool/leak diagnostics: available on request via CLI "ip stats"
+ * (caos/net) | "eth pool" | "eth dump" (caos/drivers/src/eth.c) - no periodic task here. */
 
 /* ============================================================================
  * CLI "e40"
@@ -336,6 +335,15 @@ static ca_cli_node_t s_ex40_cli_node = { ex40_cli_handler, NULL };
  * ============================================================================ */
 static void eth_gpio_init(void)
 {
+#if MCU_ID == 773
+    /* NUCLEO-H7S3L8 (UM3276 7.13, DS14359 AF11): REF_CLK PB6, MDIO PA2,
+     * MDC PG6, CRS_DV PA7, RXD0/RXD1 PG4/PG5, TX_EN PG11, TXD0/TXD1 PG13/PG12 */
+    static const struct { u8 port; u8 pin; } pins[] = {
+        { CA_GPIO_PORT_B,  6U }, { CA_GPIO_PORT_A,  2U }, { CA_GPIO_PORT_G,  6U },
+        { CA_GPIO_PORT_A,  7U }, { CA_GPIO_PORT_G,  4U }, { CA_GPIO_PORT_G,  5U },
+        { CA_GPIO_PORT_G, 11U }, { CA_GPIO_PORT_G, 13U }, { CA_GPIO_PORT_G, 12U },
+    };
+#else
     static const struct { u8 port; u8 pin; } pins[] = {
         { CA_GPIO_PORT_A,  1U }, { CA_GPIO_PORT_A,  2U }, { CA_GPIO_PORT_A,  7U },
         { CA_GPIO_PORT_C,  1U }, { CA_GPIO_PORT_C,  4U }, { CA_GPIO_PORT_C,  5U },
@@ -351,6 +359,7 @@ static void eth_gpio_init(void)
         { CA_GPIO_PORT_B, 13U },
 #endif
     };
+#endif
     for (u32 i = 0U; i < sizeof(pins)/sizeof(pins[0]); i++) {
         ca_gpio_configure(pins[i].port, pins[i].pin,
             CA_GPIO_MODE_AF, CA_GPIO_OTYPE_PP,

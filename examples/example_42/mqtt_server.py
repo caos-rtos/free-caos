@@ -20,9 +20,17 @@ Interactive commands (once running):
     on     -> publish "on"  on caos/led
     off    -> publish "off" on caos/led
     q      -> quit
+
+Bench mode (hw_test, ex42 fault phases): --fake-broker replaces mosquitto and
+paho with a raw-socket broker (fake_broker.py) that logs every packet and can
+misbehave once on command (oversize, QoS 1/2/3, bad CONNACK, accept hold...).
+It needs nothing the normal mode needs (no mosquitto, no paho, no sudo for
+the broker). Extra commands in that mode are listed in fake_broker.py.
+    python3 mqtt_server.py --fake-broker --no-dhcp [--pc-ip IP] [--port N]
 """
 
 import argparse
+import atexit
 import os
 import queue
 import shutil
@@ -33,28 +41,40 @@ import tempfile
 import threading
 import time
 
-try:
-    import paho.mqtt.client as mqtt_client
-except ImportError:
-    # Under sudo, root's Python does not see the user's ~/.local: the package
-    # may already be installed and still look missing here.
-    _user = os.environ.get("SUDO_USER")
-    if _user:
-        _sp = os.path.expanduser(
-            f"~{_user}/.local/lib/python{sys.version_info.major}."
-            f"{sys.version_info.minor}/site-packages")
-        if os.path.isdir(os.path.join(_sp, "paho")):
-            sys.path.insert(0, _sp)
+if "--fake-broker" in sys.argv:
+    # Bench mode only: every line of the server carries a wall-clock stamp.
+    # The normal mode prints exactly what it always did.
+    import builtins as _builtins
+    def print(*a, **k):
+        t = time.time()
+        stamp = time.strftime("%H:%M:%S", time.localtime(t)) + ".%03d" % int((t % 1) * 1000)
+        k.setdefault("flush", True)
+        _builtins.print(f"[{stamp}]", *a, **k)
+
+mqtt_client = None
+if "--fake-broker" not in sys.argv:   # the fake broker needs no paho
     try:
         import paho.mqtt.client as mqtt_client
     except ImportError:
-        print("[!] paho-mqtt not found.")
+        # Under sudo, root's Python does not see the user's ~/.local: the package
+        # may already be installed and still look missing here.
+        _user = os.environ.get("SUDO_USER")
         if _user:
-            print(f"    Installed for the user but not for root? Retry with:")
-            print(f"    sudo PYTHONPATH={_sp} {' '.join(sys.argv)}")
-        else:
-            print("    pip3 install paho-mqtt")
-        sys.exit(1)
+            _sp = os.path.expanduser(
+                f"~{_user}/.local/lib/python{sys.version_info.major}."
+                f"{sys.version_info.minor}/site-packages")
+            if os.path.isdir(os.path.join(_sp, "paho")):
+                sys.path.insert(0, _sp)
+        try:
+            import paho.mqtt.client as mqtt_client
+        except ImportError:
+            print("[!] paho-mqtt not found.")
+            if _user:
+                print(f"    Installed for the user but not for root? Retry with:")
+                print(f"    sudo PYTHONPATH={_sp} {' '.join(sys.argv)}")
+            else:
+                print("    pip3 install paho-mqtt")
+            sys.exit(1)
 
 DHCP_START = "192.168.10.100"
 DHCP_END   = "192.168.10.200"
@@ -129,7 +149,6 @@ def start_dnsmasq(iface, pc_ip):
         f"dhcp-option=option:router,{pc_ip}\n"
         f"dhcp-option=option:dns-server,8.8.8.8\n"
         f"dhcp-option=option:netmask,{MASK}\n"
-        f"log-dhcp\n"
         f"no-resolv\n"
         f"no-hosts\n"
     )
@@ -157,6 +176,12 @@ def start_dnsmasq(iface, pc_ip):
 
     pid = open(DHCP_PID).read().strip()
     print(f"[*] dnsmasq started (pid {pid})")
+    # Stopped on EVERY exit: a dnsmasq that outlived its script once grew its
+    # log to 4.2 GB and filled the root disk (ex44, 28/10)
+    atexit.register(stop_dnsmasq)
+    for _s in (signal.SIGTERM, signal.SIGHUP):
+        if signal.getsignal(_s) == signal.SIG_DFL:
+            signal.signal(_s, lambda n, f: sys.exit(128 + n))
     print(f"[*] DHCP pool {DHCP_START} - {DHCP_END}")
     print(f"[*] DHCP log: tail -f {DHCP_LOG}")
 
@@ -170,7 +195,7 @@ def stop_dnsmasq():
             pass
     else:
         subprocess.run(["pkill", "-f", "dnsmasq-caos42"], stderr=subprocess.DEVNULL)
-    for p in [DHCP_PID, DHCP_CONF]:
+    for p in [DHCP_PID, DHCP_CONF, DHCP_LOG]:
         try: os.remove(p)
         except Exception: pass
 
@@ -301,6 +326,7 @@ def publish_led(state):
 _cleanup_done = False
 _mosq_proc    = None
 _paho_client  = None
+_fake         = None
 
 def cleanup(iface, pc_ip, with_dhcp):
     global _cleanup_done
@@ -312,6 +338,7 @@ def cleanup(iface, pc_ip, with_dhcp):
     # dnsmasq stays alive holding the IP for the next example (Address in use).
     for _step in (lambda: stop_paho_client(_paho_client),
                   lambda: stop_mosquitto(_mosq_proc),
+                  lambda: _fake.stop() if _fake else None,
                   stop_dnsmasq if with_dhcp else None):
         if _step is None:
             continue
@@ -335,7 +362,7 @@ def cleanup(iface, pc_ip, with_dhcp):
 # --------------------------------------------------------------------------
 
 def main():
-    global _mosq_proc, _paho_client
+    global _mosq_proc, _paho_client, _fake, BROKER_PORT
 
     parser = argparse.ArgumentParser(
         description="caOS EX42 - MQTT broker + DHCP",
@@ -346,7 +373,13 @@ def main():
                         help="PC IP to configure on the interface")
     parser.add_argument("--no-dhcp", action="store_true",
                         help="Disable the DHCP server (broker only)")
+    parser.add_argument("--fake-broker", action="store_true",
+                        help="bench mode: raw-socket fake broker instead of "
+                             "mosquitto (see fake_broker.py)")
+    parser.add_argument("--port", type=int, default=BROKER_PORT,
+                        help="broker TCP port")
     args = parser.parse_args()
+    BROKER_PORT = args.port
 
     with_dhcp    = bool(args.iface) and not args.no_dhcp
     actual_pc_ip = args.pc_ip
@@ -371,10 +404,15 @@ def main():
         print("    Or use --no-dhcp for a broker on localhost only.")
         sys.exit(1)
 
-    _mosq_proc   = start_mosquitto(actual_pc_ip)
-    time.sleep(0.5)
-    _paho_client = start_paho_client(actual_pc_ip)
-    time.sleep(0.5)
+    if args.fake_broker:
+        from fake_broker import FakeBroker
+        _fake = FakeBroker(actual_pc_ip, BROKER_PORT)
+        _fake.start()
+    else:
+        _mosq_proc   = start_mosquitto(actual_pc_ip)
+        time.sleep(0.5)
+        _paho_client = start_paho_client(actual_pc_ip)
+        time.sleep(0.5)
 
     def _sig_handler(sig, frame):
         cleanup(args.iface or "", actual_pc_ip, with_dhcp)
@@ -392,6 +430,8 @@ def main():
     if with_dhcp:
         print(f" DHCP pool  {DHCP_START} - {DHCP_END}")
     print("=" * 60)
+    if _fake:
+        print(" FAKE BROKER (bench mode) - fault commands: see fake_broker.py")
     print(" Commands: on | off | q")
     print("-" * 60)
 
@@ -401,6 +441,12 @@ def main():
                 cmd = input("> ").strip().lower()
             except EOFError:
                 break
+            if _fake:
+                if cmd == "q":
+                    break
+                if not _fake.command(cmd):
+                    print("  Unknown fake-broker command: " + cmd)
+                continue
             if cmd in ("on", "off"):
                 publish_led(cmd)
             elif cmd == "q":

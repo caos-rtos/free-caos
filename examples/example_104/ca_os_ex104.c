@@ -14,7 +14,7 @@
  * 384 subframes) over and over by circular DMA; the SPDIFRX receives it. One
  * jumper on the same connector of the three Nucleo:
  *
- *     PE6 SD_A  CN9-20  ---->  PD7 SPDIFRX_IN  CN9-2
+ *     PE6 SD_A  CN9-20  ---->  PD7 SPDIFRX_IN  CN9-2   (H7S3: SD_A = PC1)
  *
  *   spdif test [fs]    one rate, four checks:
  *                        sync     the rate the SPDIFRX measures is the one
@@ -46,7 +46,16 @@
 #define EX104_POLL_WORDS (2U * EX104_BLOCK)
 #define EX104_FS_TOL_PM 20U           /* measured fs within 2% (H7: 1% resolution) */
 
+/* SD_A is CN9-20 on every Nucleo: PC1 on the H7S3 (UM3276 Table 13), PE6 elsewhere */
+#if MCU_ID == 773
+#define SDA_PORT        CA_GPIO_PORT_C
+#define SDA_PIN         CA_GPIO_PIN_1
+#define WIRE_TXT        "PC1 SD_A CN9-20 ---- PD7 SPDIFRX_IN CN9-2"
+#else
+#define SDA_PORT        CA_GPIO_PORT_E
+#define SDA_PIN         CA_GPIO_PIN_6
 #define WIRE_TXT        "PE6 SD_A CN9-20 ---- PD7 SPDIFRX_IN CN9-2"
+#endif
 
 /* Static, not on the stack: on H7 the stacks are in DTCM, out of DMA reach */
 static i32 s_tx[EX104_BLOCK];
@@ -222,17 +231,17 @@ static void ex104_wire(void)
 {
     ca_sai_stop();
     ca_spdifrx_stop();
-    ca_gpio_init_port(CA_GPIO_PORT_E);
+    ca_gpio_init_port(SDA_PORT);
     ca_gpio_init_port(CA_GPIO_PORT_D);
-    ca_gpio_configure(CA_GPIO_PORT_E, CA_GPIO_PIN_6, CA_GPIO_MODE_OUTPUT,
+    ca_gpio_configure(SDA_PORT, SDA_PIN, CA_GPIO_MODE_OUTPUT,
                       CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
     ca_gpio_configure(CA_GPIO_PORT_D, CA_GPIO_PIN_7, CA_GPIO_MODE_INPUT,
                       CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_PULLDOWN, 0);
 
-    ca_gpio_write(CA_GPIO_PORT_E, CA_GPIO_PIN_6, 0);
+    ca_gpio_write(SDA_PORT, SDA_PIN, 0);
     for (volatile u32 d = 0; d < 20000U; d++) { }
     const u8 lo = ca_gpio_read(CA_GPIO_PORT_D, CA_GPIO_PIN_7);
-    ca_gpio_write(CA_GPIO_PORT_E, CA_GPIO_PIN_6, 1);
+    ca_gpio_write(SDA_PORT, SDA_PIN, 1);
     for (volatile u32 d = 0; d < 20000U; d++) { }
     const u8 hi = ca_gpio_read(CA_GPIO_PORT_D, CA_GPIO_PIN_7);
     const bool ok = (lo == 0U && hi == 1U);

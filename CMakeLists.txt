@@ -11,10 +11,11 @@ project(caOS_FREE C ASM)
 include(${CMAKE_SOURCE_DIR}/cpu.cmake)
 
 # --- MCU -> family/board ----------------------------------------------------
-set(_BOARDS F446 f4xx/f446  F767 f7xx/f767  H563 h5xx/h563  H753 h7xx/h753  U575 u5xx/u575)
+set(_BOARDS F439 f4xx/f439  F446 f4xx/f446  F767 f7xx/f767  H563 h5xx/h563  H753 h7xx/h753
+            H773 h7rsxx/h773  U575 u5xx/u575)
 list(FIND _BOARDS "${CURR_MCU}" _i)
 if(_i LESS 0)
-    message(FATAL_ERROR "CURR_MCU=${CURR_MCU}: caOS FREE supports F446, F767, H563, H753, U575")
+    message(FATAL_ERROR "CURR_MCU=${CURR_MCU}: caOS FREE supports F439, F446, F767, H563, H753, H773, U575")
 endif()
 math(EXPR _i "${_i} + 1")
 list(GET _BOARDS ${_i} BOARD_PATH)
@@ -109,6 +110,24 @@ foreach(_d IN LISTS _wp)
     string(REGEX MATCH "^app_([0-9]+)$" _m "${_n}")
     if(_m AND IS_DIRECTORY ${_d})
         set(_app app_${CMAKE_MATCH_1})
+        # H773: app_5 is the XSPI2 trampoline (workspace/app_5/doc) -
+        # trampoline_h773.c ALONE in the 64 KB internal flash, its own linker
+        # script, no caOS library and no C runtime startup.
+        if(CURR_MCU STREQUAL "H773" AND EXISTS ${_d}/trampoline_h773.ld)
+            set(_t ${MCU_LC}_${_app})
+            add_executable(${_t} ${_d}/trampoline_h773.c)
+            target_compile_definitions(${_t} PRIVATE ${MCU_DEFINES})
+            target_include_directories(${_t} PRIVATE ${_d} ${CAOS_INCLUDES})
+            # no libc: keep GCC from turning the .data/.bss loops into memcpy/memset
+            target_compile_options(${_t} PRIVATE ${MCU_OPTIONS} -std=gnu11 -mthumb -Wall
+                                   -fno-tree-loop-distribute-patterns)
+            target_link_options(${_t} PRIVATE ${MCU_OPTIONS} -T${_d}/trampoline_h773.ld
+                                -nostartfiles -nostdlib -Wl,--gc-sections -Wl,-Map=${_t}.map)
+            target_link_libraries(${_t} gcc)
+            set_target_properties(${_t} PROPERTIES SUFFIX ".elf" RUNTIME_OUTPUT_DIRECTORY ${ELF_DIR})
+            add_custom_command(TARGET ${_t} POST_BUILD COMMAND ${CMAKE_SIZE} $<TARGET_FILE:${_t}>)
+            continue()
+        endif()
         caos_firmware(${_app} ${_d})
         # The bootloader itself (boot.cmake): linked inside its area, so a
         # bootloader grown past CA_BOOT_LOADER_LEN fails here instead of

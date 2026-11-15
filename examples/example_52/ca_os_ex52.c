@@ -15,7 +15,8 @@
  * /dev/ttyACM0. The example performs an echo (serial loopback): every byte received from
  * the host is sent back, and a welcome prompt is sent upon opening (DTR).
  *
- * Supported hardware: H753 (USB_NUM=1), U575 (USB_NUM=0), F407 (USB_NUM=0).
+ * Supported hardware: H753 (USB_NUM=1), U575 (USB_NUM=0), F407 (USB_NUM=0),
+ *                     H773 (USB_NUM=0, OTG_HS at FS).
  *
  * Test from PC:
  *   lsusb -v -d ca01:                 # IAD + CDC Communications + CDC Data
@@ -38,12 +39,16 @@
 #define USB_NUM      1U    /* OTG_FS CN14 without ULPI — change to 0 if ULPI is available */
 #define EP_BULK_MPS  64U   /* 64 for OTG_FS, 512 for OTG_HS ULPI */
 
-#elif MCU_ID == 407 || MCU_ID == 446 || MCU_ID == 767
+#elif MCU_ID == 407 || MCU_ID == 439 || MCU_ID == 446 || MCU_ID == 767
 #define USB_NUM      0U
 #define EP_BULK_MPS  64U
 
 #elif MCU_ID == 563
 #define USB_NUM      0U          /* USB_DRD_FS — single instance H563 */
+#define EP_BULK_MPS  64U
+
+#elif MCU_ID == 773
+#define USB_NUM      0U          /* OTG_HS, integrated HS PHY run at FS (Type-C CN2) */
 #define EP_BULK_MPS  64U
 
 #else

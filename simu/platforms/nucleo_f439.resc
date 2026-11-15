@@ -1,0 +1,8 @@
+# Factory calibration (12-bit ADC) reads 0 in Renode: see nucleo_h753.resc.
+sysbus WriteWord 0x1FFF7A2C 1520   # TS_CAL1 (30 C)
+sysbus WriteWord 0x1FFF7A2E 1790   # TS_CAL2 (110 C)
+sysbus WriteWord 0x1FFF7A2A 1500   # VREFINT_CAL
+# Reset vector: the image is linked and loaded at 0x08000000, but at 0x00000000 the
+# model maps nothing (or an empty RAM). LoadELF sets SP/PC for the first boot only:
+# without this every software reset fetched SP=0/PC=0 (simu/CHANGES.md 27).
+cpu InitVectorTableOffset 0x08000000

@@ -19,7 +19,7 @@
 
 /* Number of network pool buffers (NET_BUF_SIZE = 2048 B each).
  * It lives HERE and nowhere else: see the note in caos/net/inc/net_buf.h.
- * RAM 128K like the F407 (NOT 256K like the F429, which this file was derived
+ * RAM 128K like the F407 (NOT 192K like the F439, whose F429 predecessor this was derived
  * from): with 16, the 32KB of .net_pool overflowed the RAM by ~13KB on ex55
  * and ex69-83. 8*2048 = 16KB. */
 #define NET_BUF_COUNT   8
@@ -87,7 +87,7 @@ typedef enum {
 
 #define EVAL_F4XX(MSG)       MSG  
 #define EVAL_F407(MSG)         
-#define EVAL_F429(MSG)         
+#define EVAL_F439(MSG)         
 #define EVAL_F446(MSG)       MSG  
 
 #define EVAL_F7XX(MSG)         
@@ -99,6 +99,9 @@ typedef enum {
 #define EVAL_H7XX(MSG)         
 #define EVAL_H747(MSG)          
 #define EVAL_H753(MSG)          
+
+#define EVAL_H7RSXX(MSG)
+#define EVAL_H773(MSG)
 
 /* =============================================================================
  * HARDWARE CAPABILITIES / MPU REGIONS  (Cortex-M4, 8 MPU regions)

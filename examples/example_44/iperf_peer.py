@@ -72,7 +72,6 @@ def start_dnsmasq(iface, pc_ip):
         f"dhcp-option=option:router,{pc_ip}\n"
         f"dhcp-option=option:dns-server,8.8.8.8\n"
         f"dhcp-option=option:netmask,{MASK}\n"
-        f"log-dhcp\n"
         f"no-resolv\n"
         f"no-hosts\n"
     )
@@ -118,11 +117,20 @@ def stop_dnsmasq():
             pass
     else:
         subprocess.run(["pkill", "-f", "dnsmasq-caos44"], stderr=subprocess.DEVNULL)
-    for p in [DHCP_PID, DHCP_CONF]:
+    # The log too: no 'log-dhcp' any more (the DHCPACK lines wait_board_ip
+    # reads are logged without it), but a dnsmasq left running once grew it
+    # to 4.2 GB and filled the root disk (28/10)
+    for p in [DHCP_PID, DHCP_CONF, DHCP_LOG]:
         try:
             os.remove(p)
         except Exception:
             pass
+
+
+def _exit_on_signal(signum, frame):
+    # SIGTERM/SIGHUP (terminal closed, kill) skipped the finally below and
+    # left dnsmasq running: turn them into a normal exit
+    raise SystemExit(128 + signum)
 
 
 def wait_board_ip(timeout_s=60):
@@ -269,14 +277,26 @@ def main():
         sys.exit(1)
 
     board_ip = args.board_ip
+    signal.signal(signal.SIGTERM, _exit_on_signal)
+    signal.signal(signal.SIGHUP, _exit_on_signal)
 
     if not args.no_dhcp:
         setup_interface(args.iface, args.pc_ip)
         start_dnsmasq(args.iface, args.pc_ip)
+    try:
+        session(args, board_ip)
+    finally:
+        # Ctrl+C during the 60 s DHCP wait used to leave dnsmasq running: the
+        # try started only after it
+        if not args.no_dhcp:
+            stop_dnsmasq()
+
+
+def session(args, board_ip):
+    if not args.no_dhcp:
         board_ip = wait_board_ip(60)
         if board_ip is None:
             print("[!] The board got no IP - check the cable and retry.")
-            stop_dnsmasq()
             sys.exit(1)
         print(f"[*] Board IP: {board_ip}")
     else:
@@ -289,20 +309,21 @@ def main():
         print(f"  Board IP: {board_ip}")
     print(f"{'='*50}\n")
 
-    try:
-        if args.mode == 'server':
-            print(f"[*] Now on the board console:  iperf client {args.pc_ip} {args.port}\n")
-            run_server(args.pc_ip, args.port)
-        else:
-            if board_ip is None:
-                print("[!] mode=client needs the board IP (from DHCP, or --no-dhcp plus --board-ip)")
-                sys.exit(1)
-            print(f"[*] Now on the board console:  iperf server {args.port}\n")
-            run_client(board_ip, args.port, args.dur)
-    finally:
-        if not args.no_dhcp:
-            stop_dnsmasq()
+    if args.mode == 'server':
+        print(f"[*] Now on the board console:  iperf client {args.pc_ip} {args.port}\n")
+        run_server(args.pc_ip, args.port)
+    else:
+        if board_ip is None:
+            print("[!] mode=client needs the board IP (from DHCP, or --no-dhcp plus --board-ip)")
+            sys.exit(1)
+        print(f"[*] Now on the board console:  iperf server {args.port}\n")
+        run_client(board_ip, args.port, args.dur)
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        # the finally in main() has already stopped dnsmasq
+        print("\n[*] interrupted")
+        sys.exit(130)
