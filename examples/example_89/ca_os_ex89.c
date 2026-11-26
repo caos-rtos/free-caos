@@ -386,54 +386,61 @@ static const char *word(const char *s, char *out, u32 cap)
     return ca_skip_sp(s);
 }
 
-static bool ex89_cli_handler(c_str *pcmd)
+/* one entry per command word; each gets the line without its word */
+static bool makekey_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("makekey   : <pwd1> <pwd2> <N> build the 16-key block in flash");
-        CLI_PUT_N("start     : <pwd2> unlock the keystore, then 'fat ecat <N> <file>'");
-        CLI_PUT_N("lock      : lock the keystore");
-        CLI_PUT_N("etest     : encrypted-file check, keys 0/1 (needs start; FORMATS the card)");
-        return false;
-    }
-
-    if (ca_strncmp(p, "makekey", 7) == 0) {
-        char n_s[8];
-        const char *a = word(p + 7, s_pwd1, sizeof(s_pwd1));
-        a = word(a, s_pwd2, sizeof(s_pwd2));
-        word(a, n_s, sizeof(n_s));
-        u16 idx = 0;
-        u32 n = n_s[0] ? (u32)ca_strtol_index(n_s, 10, &idx) : 0U;
-        if (!s_pwd1[0] || !s_pwd2[0] || n < 1U || n > 16U) {
-            ca_memzero(s_pwd1, sizeof(s_pwd1)); ca_memzero(s_pwd2, sizeof(s_pwd2));
-            CLI_PUT_N("makekey: usage: makekey <pwd1> <pwd2> <N 1..16>");
-            return true;
-        }
-        s_n_evolve = n;
-        post(JOB_MAKEKEY);
+    const char *p = (*args)->data;
+    char n_s[8];
+    const char *a = word(p, s_pwd1, sizeof(s_pwd1));
+    a = word(a, s_pwd2, sizeof(s_pwd2));
+    word(a, n_s, sizeof(n_s));
+    u16 idx = 0;
+    u32 n = n_s[0] ? (u32)ca_strtol_index(n_s, 10, &idx) : 0U;
+    if (!s_pwd1[0] || !s_pwd2[0] || n < 1U || n > 16U) {
+        ca_memzero(s_pwd1, sizeof(s_pwd1)); ca_memzero(s_pwd2, sizeof(s_pwd2));
+        CLI_PUT_N("makekey: usage: makekey <pwd1> <pwd2> <N 1..16>");
         return true;
     }
-
-    if (ca_strncmp(p, "start", 5) == 0) {
-        word(p + 5, s_pwd2, sizeof(s_pwd2));
-        if (!s_pwd2[0]) { CLI_PUT_N("start: usage: start <pwd2>"); return true; }
-        post(JOB_START);
-        return true;
-    }
-
-    if (ca_strncmp(p, "lock", 4) == 0 && (p[4] == '\0' || p[4] == ' ')) {
-        ca_keystore_service_lock();
-        CLI_PUT_N("lock: keystore locked");
-        return true;
-    }
-
-    if (ca_strncmp(p, "etest", 5) == 0) { post(JOB_ETEST); return true; }
-
-    return false;
+    s_n_evolve = n;
+    post(JOB_MAKEKEY);
+    return true;
 }
 
-static ca_cli_node_t s_ex89_cli = { ex89_cli_handler, NULL };
+static bool start_cmd(c_str *args)
+{
+    const char *p = (*args)->data;
+    word(p, s_pwd2, sizeof(s_pwd2));
+    if (!s_pwd2[0]) { CLI_PUT_N("start: usage: start <pwd2>"); return true; }
+    post(JOB_START);
+    return true;
+}
+
+static bool lock_cmd(c_str *args)
+{
+    (void)args;
+    ca_keystore_service_lock();
+    CLI_PUT_N("lock: keystore locked");
+    return true;
+}
+
+static bool etest_cmd(c_str *args)
+{
+    (void)args;
+    post(JOB_ETEST);
+    return true;
+}
+
+static const ca_cli_cmd_t s_ex89_cmds[] = {
+    { "makekey", "makekey   : <pwd1> <pwd2> <N> build the 16-key block in flash", { makekey_cmd, STACK_MEDIUM } },
+    { "start", "start     : <pwd2> unlock the keystore, then 'fat ecat <N> <file>'", { start_cmd, STACK_MEDIUM } },
+    { "lock", "lock      : lock the keystore", { lock_cmd, STACK_MEDIUM } },
+    { "etest", "etest     : encrypted-file check, keys 0/1 (needs start; FORMATS the card)", { etest_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_ex89_table = {
+    "ex89", s_ex89_cmds, (u16)(sizeof(s_ex89_cmds) / sizeof(s_ex89_cmds[0])), NULL
+};
+
 
 /* ============================================================================
  * Heartbeat
@@ -464,7 +471,7 @@ void ca_os_configure(void)
     )
     ca_fat_service_init();              /* registers `fat` (needs ca_cli_init) */
     EVAL_CLI(
-        ca_cli_register(&s_ex89_cli);
+        ca_cli_register_table(&s_ex89_table);
         ca_cli_create_thread();
     )
 

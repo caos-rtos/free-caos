@@ -112,7 +112,7 @@
 /* ============================================================================
  * Network
  * ============================================================================ */
-static const ca_mac_t s_mac = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x85U } };
+static const ca_mac_t s_mac = CA_EXAMPLE_MAC(85);
 
 static volatile ca_ipv4_t s_ip         = { .addr = 0U };
 static volatile bool   s_dhcp_bound = false;
@@ -122,7 +122,7 @@ static void on_link_change(bool up);
 static ca_eth_cfg_t eth_cfg = {
     .phy_addr = 0U,
     .rmii     = true,
-    .mac      = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x85U } },
+    .mac      = CA_EXAMPLE_MAC(85),
     .link_cb  = on_link_change,
 };
 
@@ -196,6 +196,11 @@ static void sink_on_closed(u8 h)
      * goes, which frees the slot. */
     if (c) c->handle = 0U;
 }
+
+/* 'msink start' asks, task_eth_mon listens: a listener belongs to the task
+ * that opened it (task_reaper.md), and a CLI command runs in a task that ends
+ * with the command - the TCP timer would close the port a second later. */
+static volatile u16 s_start_req;         /* port to open, 0 = none */
 
 static bool sink_start(u16 port)
 {
@@ -284,17 +289,10 @@ static void sink_report(void)
  * CLI
  * ========================================================================== */
 #if ENABLE_CLI
-static bool sink_cli_handler(c_str *pcmd)
+/* msink — the line arrives without the command word */
+static bool msink_cmd(c_str *args)
 {
-    c_str cmd = *pcmd;
-    const char *p = ca_skip_sp(cmd->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("msink     : start [port] | stats | stop");
-        return false;
-    }
-    if (ca_strncmp(p, "msink", 5) != 0) return false;
-    p = ca_skip_sp(p + 5);
-
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "start", 5) == 0) {
         p = ca_skip_sp(p + 5);
         u16 port = (*p != '\0') ? (u16)ca_strtol(p, 10) : SINK_PORT_DEFAULT;
@@ -303,8 +301,12 @@ static bool sink_cli_handler(c_str *pcmd)
             CLI_PUT_N("msink: no IP yet - wait for DHCP BOUND");
             return true;
         }
-        if (sink_start(port)) CLI_PRINTF_N("msink: listening on %u", (u32)port);
-        else                  CLI_PUT_N("msink: already started, or listen failed");
+        if (s_listen_h != 0U) {
+            CLI_PUT_N("msink: already started");
+        } else {
+            s_start_req = port;           /* task_eth_mon opens it, <= 0.5 s */
+            CLI_PRINTF_N("msink: start on %u requested", (u32)port);
+        }
         return true;
     }
     if (ca_strncmp(p, "stats", 5) == 0) {
@@ -320,11 +322,16 @@ static bool sink_cli_handler(c_str *pcmd)
         return true;
     }
 
-    CLI_PUT_N("msink     : start [port] | stats | stop");
-    return false;
+    return false;                   /* cli prints the help line */
 }
 
-static ca_cli_node_t s_sink_cli_node = { sink_cli_handler, NULL };
+static const ca_cli_cmd_t s_msink_cmds[] = {
+    { "msink", "msink     : start [port] | stats | stop", { msink_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_msink_table = {
+    "msink", s_msink_cmds, (u16)(sizeof(s_msink_cmds) / sizeof(s_msink_cmds[0])), NULL
+};
 #endif
 
 /* ============================================================================
@@ -376,7 +383,7 @@ static void on_link_change(bool up)
  * ========================================================================== */
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .addr = 0U },
-    .mac  = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x85U } },
+    .mac  = CA_EXAMPLE_MAC(85),
     .udp  = { .bindings = { {0U, NULL} }, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -464,6 +471,14 @@ static u32 task_eth_mon(void *arg)
             bound_at = 0U;        /* lease gone: re-arm for the next one */
         }
 
+        /* 'msink start [port]' from the CLI */
+        const u16 req = s_start_req;
+        if (req != 0U) {
+            s_start_req = 0U;
+            if (sink_start(req)) ca_stdout_printf_n("msink: listening on %u", (u32)req);
+            else                 ca_stdout_put_n("msink: already started, or listen failed");
+        }
+
         ca_os_sleep(500);
     }
     return 0U;
@@ -519,7 +534,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_sink_cli_node);
+        ca_cli_register_table(&s_msink_table);
     )
     EVAL_USB_CDC_STD(ca_usb_dev_mng_cdc_cli();)
 

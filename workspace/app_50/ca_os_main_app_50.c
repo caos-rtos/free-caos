@@ -2223,6 +2223,15 @@ static bool menu_input(const char *line)
     return true;
 }
 
+/* The open menu owns every line (ca_cli_capture_next): one line at a time,
+ * re-armed while the menu stays open. */
+static bool menu_capture(c_str *line)
+{
+    const bool r = menu_input((*line)->data);
+    if (s_menu != MENU_OFF) ca_cli_capture_next(menu_capture);
+    return r;
+}
+
 /* Start or stop one sensor, with the reason printed when it cannot happen.
  * Factored out so "lux start" (both) and "lux start 1" (one) cannot drift
  * apart - two copies of this would, at the first change to either. */
@@ -2297,110 +2306,394 @@ static void lux_stop_one(u8 idx)
     s->dark_hold_ok = false;    /* a held dark does not survive a stop */
 }
 
-static bool user_cli_handler(c_str *pcmd)
+/* one entry per command word; each gets the line without its word */
+static bool show_cmd(c_str *args)
 {
-    c_str       cmd = *pcmd;
-    const char *p   = ca_skip_sp(cmd->data);
+    (void)args;
+    /* Print both forms: the datasheet quotes 0x40 (the 8-bit write byte)
+     * while the caOS API takes the 7-bit address, and seeing only one of
+     * the two is exactly what makes people suspect the wrong thing. */
+    CLI_PRINTF_N("VD6283TX x2 - address 0x%02X 7-bit (= 0x%02X write / 0x%02X read)",
+                 VD6283_ADDR, VD6283_ADDR << 1, (VD6283_ADDR << 1) | 1u);
+    CLI_PRINTF_N("  readout    : 24-bit, continuous, period 0");
+    CLI_PRINTF_N("  queue      : %u/%u items", ca_queue_static_count(&s_queue.q), Q_DEPTH);
+    CLI_PRINTF_N("  printed    : %u", s_printed);
+    for (u8 i = 0; i < SENSOR_COUNT; i++) {
+        const sensor_ctx_t *s = &s_sensor[i];
+        /* "present" only becomes true once the task has run and probed the
+         * part, so an idle sensor must not be reported as missing. */
+        CLI_PRINTF_N("  sensor %s   : %s  (lux %s %u)", s->label,
+                     !s->up      ? "I2C init FAILED" :
+                     !s->running ? "stopped" :
+                     s->present  ? "running" :
+                     s->fail == FAIL_NO_ACK ? "no answer on the bus" :
+                     s->fail == FAIL_BAD_ID ? "wrong DEVICE_ID" :
+                     s->fail == FAIL_CONFIG ? "config write failed" :
+                                              "starting",
+                     s->running ? "stop" : "start", (u32)(i + 1u));
+        CLI_PRINTF_N("    %s", s->pins);
+        if (s->fail == FAIL_BAD_ID)
+            CLI_PRINTF_N("    read id=0x%02X rev=0x%02X, expected id=0x%02X",
+                         s->dev_id, s->rev_id, VD6283_DEV_ID_VAL);
+        {   /* Acquisition parameters per sensor: with the autogain on
+             * these differ between the two and drift over time, so a
+             * single global line at the top would be wrong for both. */
+            u32 gw, gf; gain_text(s->gain_idx, &gw, &gf);
+            CLI_PRINTF_N("    exp=%ums period=%ums (~%ums/sample)"
+                         " gain=%u.%02ux otp=%s auto=%s",
+                         exposure_ms(s), IM_STEPS_TO_MS(s->im_steps),
+                         SAMPLE_PERIOD_MS(s), gw, gf,
+                         !s->otp.read ? "n/a" : s->otp_on ? "on" : "off",
+                         s->auto_gain ? "on" : "off");
+        }
+        if (s->meas_on)
+            CLI_PRINTF_N("    meas: on %s, 1 dark every %u, Kdark=%u.%03u,"
+                         " discard=%u, held=%s",
+                         (s->meas_ch == MEAS_CH_CLEAR) ? "CLEAR" : "VIS",
+                         (u32)s->meas_div, s->k_dark / K_DARK_SCALE,
+                         s->k_dark % K_DARK_SCALE, (u32)s->meas_discard,
+                         s->dark_hold_ok ? "yes" : "not yet");
+        CLI_PRINTF_N("    woke=%u samples=%u errors=%u dropped=%u adjusts=%u",
+                     s->woke, s->samples, s->errors, s->dropped, s->adjusts);
+        if (s->frozen > 2u)
+            CLI_PRINTF_N("    ^ %u identical frames: the part is not refreshing",
+                         s->frozen);
+    }
+    return true;
+}
 
-    /* An open menu owns the line before any command is considered. Nothing
-     * else can run while it is up, which is what makes "1" unambiguous. */
-    if (s_menu != MENU_OFF) return menu_input(p);
+static bool lux_cmd(c_str *args)
+{
+    const char *p = (*args)->data;
+    const char *sub = ca_skip_sp(p);
 
-    if (ca_strncmp(p, "show", 4) == 0) {
-        /* Print both forms: the datasheet quotes 0x40 (the 8-bit write byte)
-         * while the caOS API takes the 7-bit address, and seeing only one of
-         * the two is exactly what makes people suspect the wrong thing. */
-        CLI_PRINTF_N("VD6283TX x2 - address 0x%02X 7-bit (= 0x%02X write / 0x%02X read)",
-                     VD6283_ADDR, VD6283_ADDR << 1, (VD6283_ADDR << 1) | 1u);
-        CLI_PRINTF_N("  readout    : 24-bit, continuous, period 0");
-        CLI_PRINTF_N("  queue      : %u/%u items", ca_queue_static_count(&s_queue.q), Q_DEPTH);
-        CLI_PRINTF_N("  printed    : %u", s_printed);
+    /* Sensors are 1-based on the command line, 0-based in the array.
+     * ca_strtol returns 0 on a malformed string, which the range check
+     * below rejects along with a genuine "0". */
+    bool is_start = (ca_strncmp(sub, "start", 5) == 0);
+    bool is_stop  = (ca_strncmp(sub, "stop",  4) == 0);
+    bool is_otp   = (ca_strncmp(sub, "otp",   3) == 0);
+    bool is_setup = (ca_strncmp(sub, "setup", 5) == 0);
+    bool is_dark  = (ca_strncmp(sub, "dark",  4) == 0);
+    bool is_probe = (ca_strncmp(sub, "probe", 5) == 0);
+    bool is_bytes = (ca_strncmp(sub, "bytes", 5) == 0);
+
+    /* "lux cal" calibrates BOTH, and does the whole sequence itself:
+     * start, measure k over CAL_SAMPLES with channel 2 on VIS, restore the
+     * dark setting the user had, and stop again. Making the operator
+     * remember start/dark off/cal/stop is ceremony, and getting the order
+     * wrong silently produces a k measured against the wrong channel.
+     *
+     * Always RE-calibrates, even when k is already known: that is what the
+     * command is for - and since "lux start" stopped calibrating on its
+     * own (see lux_start_one), it is also the ONLY way k is ever measured.
+     *
+     * ⚠️ It needs a LIT bench. k is a ratio between colour channels, so in
+     * darkness it degenerates: with R, G, B and VIS all carrying nothing
+     * but dark current it converges on 1/3 regardless of the light it is
+     * supposed to describe - measured 0.374 on HW in a closed box, against
+     * ~1.07 under real light. Below the light level where R+G+B reaches
+     * zero it does not converge at all, and CAL_SKIP_MAX is what stops it
+     * waiting for ever. */
+    if (ca_strncmp(sub, "cal", 3) == 0) {
+        /* ⚠️ Refused, not silently useless. k reconstructs VIS from R+G+B
+         * for the case where channel 2 is on the dark diodes; the mixed
+         * acquisition measures VIS directly, so calibrating here would
+         * spend CAL_SAMPLES frames on a coefficient nothing reads. */
+        if (s_sensor[0].meas_on || s_sensor[1].meas_on) {
+            CLI_PRINTF_N("lux: the mixed acquisition MEASURES its signal"
+                         " channel (%s) - k is not used and not needed",
+                         (s_sensor[0].meas_ch == MEAS_CH_CLEAR) ? "CLEAR"
+                                                                : "VIS");
+            CLI_PRINTF_N("     \"lux stop\" leaves the mode, then \"lux cal\"");
+            return true;
+        }
+
         for (u8 i = 0; i < SENSOR_COUNT; i++) {
-            const sensor_ctx_t *s = &s_sensor[i];
-            /* "present" only becomes true once the task has run and probed the
-             * part, so an idle sensor must not be reported as missing. */
-            CLI_PRINTF_N("  sensor %s   : %s  (lux %s %u)", s->label,
-                         !s->up      ? "I2C init FAILED" :
-                         !s->running ? "stopped" :
-                         s->present  ? "running" :
-                         s->fail == FAIL_NO_ACK ? "no answer on the bus" :
-                         s->fail == FAIL_BAD_ID ? "wrong DEVICE_ID" :
-                         s->fail == FAIL_CONFIG ? "config write failed" :
-                                                  "starting",
-                         s->running ? "stop" : "start", (u32)(i + 1u));
-            CLI_PRINTF_N("    %s", s->pins);
-            if (s->fail == FAIL_BAD_ID)
-                CLI_PRINTF_N("    read id=0x%02X rev=0x%02X, expected id=0x%02X",
-                             s->dev_id, s->rev_id, VD6283_DEV_ID_VAL);
-            {   /* Acquisition parameters per sensor: with the autogain on
-                 * these differ between the two and drift over time, so a
-                 * single global line at the top would be wrong for both. */
-                u32 gw, gf; gain_text(s->gain_idx, &gw, &gf);
-                CLI_PRINTF_N("    exp=%ums period=%ums (~%ums/sample)"
-                             " gain=%u.%02ux otp=%s auto=%s",
-                             exposure_ms(s), IM_STEPS_TO_MS(s->im_steps),
-                             SAMPLE_PERIOD_MS(s), gw, gf,
-                             !s->otp.read ? "n/a" : s->otp_on ? "on" : "off",
-                             s->auto_gain ? "on" : "off");
+            sensor_ctx_t *t = &s_sensor[i];
+
+            if (!t->up) {
+                CLI_PRINTF_N("lux %s: no working I2C%u - cannot calibrate",
+                             t->label, t->bus);
+                continue;
             }
-            if (s->meas_on)
-                CLI_PRINTF_N("    meas: on %s, 1 dark every %u, Kdark=%u.%03u,"
-                             " discard=%u, held=%s",
-                             (s->meas_ch == MEAS_CH_CLEAR) ? "CLEAR" : "VIS",
-                             (u32)s->meas_div, s->k_dark / K_DARK_SCALE,
-                             s->k_dark % K_DARK_SCALE, (u32)s->meas_discard,
-                             s->dark_hold_ok ? "yes" : "not yet");
-            CLI_PRINTF_N("    woke=%u samples=%u errors=%u dropped=%u adjusts=%u",
-                         s->woke, s->samples, s->errors, s->dropped, s->adjusts);
-            if (s->frozen > 2u)
-                CLI_PRINTF_N("    ^ %u identical frames: the part is not refreshing",
-                             s->frozen);
+            if (t->cal_req) {
+                CLI_PRINTF_N("lux %s: already calibrating", t->label);
+                continue;
+            }
+
+            /* Calibration needs a MEASURED vis on channel 2, so dark comes
+             * off for the duration and goes back to whatever it was. */
+            t->cal_dark_was = t->dark_req;
+            t->dark_req     = false;
+
+            t->cal_acc = 0; t->cal_n = 0; t->cal_sat = 0;
+            t->cal_req = (u8)CAL_SAMPLES;
+
+            /* Start it only if it was parked - and remember, so a sensor
+             * the user had already running is left running. */
+            if (!t->running) {
+                t->cal_stop = true;
+                t->running  = true;
+            } else {
+                t->cal_stop = false;
+            }
+        }
+
+        CLI_PRINTF_N("lux: measuring k = VIS/(R+G+B) over %u samples",
+                     CAL_SAMPLES);
+        CLI_PRINTF_N("     !! NEEDS A LIT BENCH. In the dark k collapses to"
+                     " 1/3 (measured 0.374 in a");
+        CLI_PRINTF_N("     closed box against ~1.07 under real light), and"
+                     " below that it does not");
+        CLI_PRINTF_N("     converge at all - the command gives up after %u"
+                     " unusable samples.", CAL_SKIP_MAX);
+        CLI_PRINTF_N("     hold the light STEADY - k follows the spectrum");
+        CLI_PRINTF_N("     ~%u s, then the sensors park again",
+                     (CAL_SAMPLES * (exposure_ms(&s_sensor[0]) + CONV_TIME_MS)
+                      + 999u) / 1000u);
+        return true;
+    }
+
+    /* ── "lux meas" / "lux meas_cl" — the mixed signal/DARK acquisition ──
+     *
+     * Arms BOTH sensors, like "lux dark" and "lux setup": the two are only
+     * worth comparing when they run the same method.
+     *
+     * The two spellings differ in ONE thing, the channel the dark is
+     * subtracted from: "meas" corrects VIS (channel 2), "meas_cl" corrects
+     * CLEAR (channel 6), which has five photodiodes against three and no
+     * filter at all - the widest detector on the part. Everything else -
+     * div, Kdark, discard, the forced refresh, the row - is shared, so the
+     * two are one block rather than two that drift apart.
+     *
+     * ⚠️ "meas_cl" MUST be tested first: ca_strncmp(sub, "meas", 4) matches
+     * the longer word too, so the order of these two tests is the whole
+     * dispatch. Reversed, "lux meas_cl" would silently arm the VIS mode and
+     * report success.
+     *
+     * ⚠️ Kdark does NOT carry over between the two. In VIS mode signal and
+     * dark share channel 2; in CLEAR mode they do not, and the coefficient
+     * has to absorb the mismatch between two covered photodiodes and five
+     * clear ones. Re-measure it after switching - see MEAS_CH_CLEAR.
+     *
+     * There is no "lux meas off". The mode belongs to a run, not to the
+     * configuration, so "lux stop" leaves it - one way out instead of two
+     * that can disagree about what the sensor is doing.
+     *
+     * ⚠️ Arming does NOT start the sensors. Entering the mode and beginning
+     * a capture are separate decisions, exactly as they are for "lux cal":
+     * "lux meas 10 1000" then "lux start". */
+    bool is_meas_cl = (ca_strncmp(sub, "meas_cl", 7) == 0);
+    if (is_meas_cl || ca_strncmp(sub, "meas", 4) == 0) {
+        const u8    mch  = is_meas_cl ? (u8)MEAS_CH_CLEAR : (u8)MEAS_CH_VIS;
+        const char *mname = is_meas_cl ? "meas_cl" : "meas";
+        const char *mchn  = is_meas_cl ? "CLEAR" : "VIS";
+        const char *marg = ca_skip_sp(sub + (is_meas_cl ? 7u : 4u));
+
+        if (!*marg) {
+            for (u8 i = 0; i < SENSOR_COUNT; i++) {
+                const sensor_ctx_t *t = &s_sensor[i];
+                /* Reports the channel the sensor is actually armed on,
+                 * not the one this invocation named: "lux meas_cl" with no
+                 * arguments is a query, and answering it with its own
+                 * spelling instead of the mode in force would hide exactly
+                 * the mistake it is asked about. */
+                CLI_PRINTF_N("lux %s: meas %s  chan=%s  div=%u  Kdark=%u.%03u"
+                             "  discard=%u",
+                             t->label, t->meas_on ? "ON" : "off",
+                             (t->meas_ch == MEAS_CH_CLEAR) ? "CLEAR" : "VIS",
+                             (u32)t->meas_div,
+                             t->k_dark / K_DARK_SCALE,
+                             t->k_dark % K_DARK_SCALE,
+                             (u32)t->meas_discard);
+            }
+            CLI_PRINTF_N("usage: lux %s <div> [discard]   (both sensors)",
+                         mname);
+            CLI_PRINTF_N("       div     = signal samples between two dark reads");
+            CLI_PRINTF_N("       Kdark is NOT an argument here: it is"
+                         " per-part, see \"lux kdark\"");
+            CLI_PRINTF_N("       discard = frames binned after each SEL_PD switch,"
+                         " 0..%u (default %u)", MEAS_DISCARD_MAX,
+                         MEAS_SWITCH_DISCARD);
+            CLI_PRINTF_N("       N%s = norm(%s - Kdark*dark); lux stop leaves the mode",
+                         is_meas_cl ? "CLR" : "VIS", mchn);
+            CLI_PRINTF_N("       meas    = VIS (ch2, 3 diodes, IR-filtered)");
+            CLI_PRINTF_N("       meas_cl = CLEAR (ch6, 5 diodes, no filter) -"
+                         " wider band, larger count");
+            CLI_PRINTF_N("       Kdark does NOT carry over between the two");
+            return true;
+        }
+
+        u16 mate = 0;
+        i32 mdiv = ca_strtol_index(marg, 10, &mate);
+        if (mate == 0u || mdiv < (i32)MEAS_DIV_MIN || mdiv > (i32)MEAS_DIV_MAX) {
+            CLI_PRINTF_N("lux: div must be %u..%u (visible samples per dark read)",
+                         MEAS_DIV_MIN, MEAS_DIV_MAX);
+            return true;
+        }
+
+        /* ⚠️ THERE IS NO Kdark ARGUMENT ANY MORE. It was mandatory, then
+         * optional, and both were wrong once "lux kdark cal" could measure
+         * the coefficient per part: a positional argument in the middle of
+         * this command could only ever set BOTH sensors to one value, and
+         * it sat exactly where a reader expects the discard.
+         *
+         * That is not a hypothetical. On HW 2026-09-02 "lux meas_cl 1 0 3"
+         * was typed to test the discard and silently zeroed two measured
+         * calibrations, because 0 landed in the Kdark slot. The capture
+         * that came back was a different experiment from the one intended,
+         * and nothing in it said so.
+         *
+         * Kdark is set by "lux kdark <1|2> <value>" and measured by
+         * "lux kdark cal". This command no longer touches it.
+         *
+         * So: "lux meas <div> [discard]", two arguments at most. */
+        marg = ca_skip_sp(marg + mate);
+        mate = 0;
+        i32 mdisc = (i32)s_sensor[0].meas_discard;
+        if (*marg) {
+            mdisc = ca_strtol_index(marg, 10, &mate);
+            if (mate == 0u || mdisc < 0 || mdisc > (i32)MEAS_DISCARD_MAX) {
+                CLI_PRINTF_N("lux: discard must be 0..%u", MEAS_DISCARD_MAX);
+                return true;
+            }
+        }
+
+        for (u8 i = 0; i < SENSOR_COUNT; i++) {
+            sensor_ctx_t *t = &s_sensor[i];
+            t->meas_div     = (u16)mdiv;
+            t->meas_discard = (u8)mdisc;
+            /* k_dark is deliberately NOT touched here - see above. */
+            t->meas_ch      = mch;
+            t->meas_on      = true;
+            /* The mode owns SEL_PD: between dark reads channel 2 must be on
+             * the VISIBLE diodes. In VIS mode that is where the signal is
+             * read from; in CLEAR mode it is not, but channel 2 must still
+             * come back off the covered diodes or the NEXT dark read would
+             * find it already there and measure nothing new. Either way the
+             * resting state is the same one. A running task applies this at
+             * its next frame; a parked one gets it from vd_configure(). */
+            t->dark_req       = false;
+            /* Nothing held is trustworthy across an arming: div and Kdark
+             * have just changed, and so may the settings since the last
+             * dark. The first sample of the new mode gets a fresh one. */
+            t->dark_hold_ok   = false;
+            t->dark_forced    = true;
+            t->vis_since_dark = 0;
+        }
+
+        {
+            u32 ms = SAMPLE_PERIOD_MS(&s_sensor[0]);
+            CLI_PRINTF_N("lux: mixed acquisition armed on both sensors,"
+                         " correcting %s", mchn);
+            CLI_PRINTF_N("     1 dark every %d %s samples", (int)mdiv, mchn);
+            for (u8 i = 0; i < SENSOR_COUNT; i++)
+                CLI_PRINTF_N("     %s: Kdark=%u.%03u  (per-part, set by"
+                             " \"lux kdark\")", s_sensor[i].label,
+                             s_sensor[i].k_dark / K_DARK_SCALE,
+                             s_sensor[i].k_dark % K_DARK_SCALE);
+            if (is_meas_cl)
+                CLI_PRINTF_N("     Kdark measured for VIS does NOT apply here:"
+                             " 2 covered diodes vs 5 clear");
+
+            /* ⚠️ Warn at ARMING, not after a run of zeros. This mode works
+             * at the floor, and the part reports nothing below
+             * ALS_MIN_REPORTED - so at low gain with the autogain off it
+             * produces a table of zeros that looks like a fault and is not
+             * one. Caught twice on HW before it was named, both times
+             * straight after "lux kdark cal" put the sensors back on the
+             * settings they had before it borrowed them. */
+            for (u8 i = 0; i < SENSOR_COUNT; i++) {
+                const sensor_ctx_t *t = &s_sensor[i];
+                if (t->auto_gain || t->gain_idx <= MEAS_GAIN_IDX_WARN)
+                    continue;
+                {
+                    u32 gw, gf; gain_text(t->gain_idx, &gw, &gf);
+                    CLI_PRINTF_N("     !! %s is at %u.%02ux with autogain OFF"
+                                 " - the part reports nothing", t->label, gw, gf);
+                    CLI_PRINTF_N("        below %u counts (par 3.3.3), so at"
+                                 " the floor every column reads 0.",
+                                 ALS_MIN_REPORTED);
+                    CLI_PRINTF_N("        Raise the gain, or turn the autogain"
+                                 " on in \"lux setup\".");
+                }
+            }
+            CLI_PRINTF_N("     discard=%d: a dark refresh costs %u frames"
+                         " (~%u ms), forced on every gain change",
+                         (int)mdisc, 2u * ((u32)mdisc + 1u),
+                         2u * ((u32)mdisc + 1u) * ms);
+            if (s_sensor[0].running || s_sensor[1].running) {
+                /* The table changes shape mid-capture, so the new column
+                 * names have to go out now - the header is otherwise only
+                 * printed when a sensor starts. */
+                print_header();
+            } else {
+                CLI_PRINTF_N("     now \"lux start\"");
+            }
         }
         return true;
     }
 
-    if (ca_strncmp(p, "lux", 3) == 0) {
-        const char *sub = ca_skip_sp(p + 3);
+    /* ── "lux kdark" — the dark coefficient, per sensor ─────────────────
+     *
+     *   lux kdark              show both
+     *   lux kdark <1|2> <val>  set one, x1000 (1200 = 1.200)
+     *   lux kdark cal          MEASURE it on both, in darkness
+     *
+     * ⚠️ Per SENSOR, unlike every other setting this application exposes.
+     * The rest are deliberately global - the two parts are only worth
+     * comparing when they run the same configuration - but Kdark is not a
+     * configuration, it is a per-part CALIBRATION, in the same family as
+     * cal_k. Measured 1.06 on A against 1.33 on B: one shared value cannot
+     * be right for both, and 1.200 was wrong for each in opposite
+     * directions.
+     *
+     * The "cal" form is the one to prefer. See KDARK_SAMPLES: it reads
+     * CLEAR and DARK out of the same frame, on RAW counts, which is the
+     * quantity meas_correct() actually subtracts - a ratio taken by hand
+     * off the printed columns carries the two channels\' OTP coefficients
+     * and comes out some 7% wrong. */
+    if (ca_strncmp(sub, "kdark", 5) == 0) {
+        const char *karg = ca_skip_sp(sub + 5);
 
-        /* Sensors are 1-based on the command line, 0-based in the array.
-         * ca_strtol returns 0 on a malformed string, which the range check
-         * below rejects along with a genuine "0". */
-        bool is_start = (ca_strncmp(sub, "start", 5) == 0);
-        bool is_stop  = (ca_strncmp(sub, "stop",  4) == 0);
-        bool is_otp   = (ca_strncmp(sub, "otp",   3) == 0);
-        bool is_setup = (ca_strncmp(sub, "setup", 5) == 0);
-        bool is_dark  = (ca_strncmp(sub, "dark",  4) == 0);
-        bool is_probe = (ca_strncmp(sub, "probe", 5) == 0);
-        bool is_bytes = (ca_strncmp(sub, "bytes", 5) == 0);
+        if (!*karg) {
+            for (u8 i = 0; i < SENSOR_COUNT; i++)
+                CLI_PRINTF_N("lux %s: Kdark=%u.%03u", s_sensor[i].label,
+                             s_sensor[i].k_dark / K_DARK_SCALE,
+                             s_sensor[i].k_dark % K_DARK_SCALE);
+            CLI_PRINTF_N("usage: lux kdark <1|2> <value>   set one, x1000"
+                         " (1200 = 1.200)");
+            CLI_PRINTF_N("       lux kdark cal             measure both,"
+                         " IN DARKNESS");
+            CLI_PRINTF_N("  Kdark = raw CLEAR / raw DARK, both from the same"
+                         " frame with channel 2");
+            CLI_PRINTF_N("  on the covered diodes. It is a per-PART number:"
+                         " do not copy it between sensors.");
+            return true;
+        }
 
-        /* "lux cal" calibrates BOTH, and does the whole sequence itself:
-         * start, measure k over CAL_SAMPLES with channel 2 on VIS, restore the
-         * dark setting the user had, and stop again. Making the operator
-         * remember start/dark off/cal/stop is ceremony, and getting the order
-         * wrong silently produces a k measured against the wrong channel.
-         *
-         * Always RE-calibrates, even when k is already known: that is what the
-         * command is for - and since "lux start" stopped calibrating on its
-         * own (see lux_start_one), it is also the ONLY way k is ever measured.
-         *
-         * ⚠️ It needs a LIT bench. k is a ratio between colour channels, so in
-         * darkness it degenerates: with R, G, B and VIS all carrying nothing
-         * but dark current it converges on 1/3 regardless of the light it is
-         * supposed to describe - measured 0.374 on HW in a closed box, against
-         * ~1.07 under real light. Below the light level where R+G+B reaches
-         * zero it does not converge at all, and CAL_SKIP_MAX is what stops it
-         * waiting for ever. */
-        if (ca_strncmp(sub, "cal", 3) == 0) {
-            /* ⚠️ Refused, not silently useless. k reconstructs VIS from R+G+B
-             * for the case where channel 2 is on the dark diodes; the mixed
-             * acquisition measures VIS directly, so calibrating here would
-             * spend CAL_SAMPLES frames on a coefficient nothing reads. */
+        /* ── "lux kdark cal" ───────────────────────────────────────────── */
+        if (ca_strncmp(karg, "cal", 3) == 0) {
+            /* Refused during the mixed acquisition for the same reason
+             * "lux cal" is: that mode owns SEL_PD and drives channel 2 back
+             * to the visible diodes between dark reads, so it would fight
+             * the dark mode this measurement needs for every frame. */
             if (s_sensor[0].meas_on || s_sensor[1].meas_on) {
-                CLI_PRINTF_N("lux: the mixed acquisition MEASURES its signal"
-                             " channel (%s) - k is not used and not needed",
-                             (s_sensor[0].meas_ch == MEAS_CH_CLEAR) ? "CLEAR"
-                                                                    : "VIS");
-                CLI_PRINTF_N("     \"lux stop\" leaves the mode, then \"lux cal\"");
+                CLI_PRINTF_N("lux: the mixed acquisition owns channel 2 -"
+                             " \"lux stop\" first, then \"lux kdark cal\"");
+                return true;
+            }
+
+            /* ⚠️ Only on PARKED sensors, because this command changes gain
+             * and exposure - and in this application those are written by
+             * vd_configure() at start, exactly like the clamp. Refusing is
+             * the same answer "lux setup" and "lux clamp" give, and for the
+             * same reason: a setting that lands three commands later is how
+             * a capture ends up describing settings it was not taken at. */
+            if (s_sensor[0].running || s_sensor[1].running) {
+                CLI_PRINTF_N("lux: this sets gain and exposure itself -"
+                             " \"lux stop\" first, then \"lux kdark cal\"");
                 return true;
             }
 
@@ -2408,923 +2701,653 @@ static bool user_cli_handler(c_str *pcmd)
                 sensor_ctx_t *t = &s_sensor[i];
 
                 if (!t->up) {
-                    CLI_PRINTF_N("lux %s: no working I2C%u - cannot calibrate",
+                    CLI_PRINTF_N("lux %s: no working I2C%u - cannot measure",
                                  t->label, t->bus);
                     continue;
                 }
-                if (t->cal_req) {
-                    CLI_PRINTF_N("lux %s: already calibrating", t->label);
+                if (t->kd_req) {
+                    CLI_PRINTF_N("lux %s: already measuring Kdark", t->label);
                     continue;
                 }
 
-                /* Calibration needs a MEASURED vis on channel 2, so dark comes
-                 * off for the duration and goes back to whatever it was. */
-                t->cal_dark_was = t->dark_req;
-                t->dark_req     = false;
+                /* Channel 2 must be on the COVERED diodes for the whole
+                 * measurement - the opposite of what "lux cal" needs, and
+                 * restored the same way when it finishes. */
+                t->kd_dark_was = t->dark_req;
+                t->dark_req    = true;
 
-                t->cal_acc = 0; t->cal_n = 0; t->cal_sat = 0;
-                t->cal_req = (u8)CAL_SAMPLES;
+                /* Maximum sensitivity for the duration, restored when it
+                 * finishes or gives up. See kd_gain_was: at unity gain the
+                 * dark is not merely small, it is zero, and the operator
+                 * should not have to know that before running a command
+                 * whose whole job is to measure the dark. */
+                t->kd_gain_was = t->gain_idx;   t->gain_idx  = 0u;
+                t->kd_exp_was  = t->exp_steps;  t->exp_steps = EXTIME_STEPS_MAX;
+                t->kd_auto_was = t->auto_gain;  t->auto_gain = false;
 
-                /* Start it only if it was parked - and remember, so a sensor
-                 * the user had already running is left running. */
-                if (!t->running) {
-                    t->cal_stop = true;
-                    t->running  = true;
-                } else {
-                    t->cal_stop = false;
-                }
-            }
+                t->kd_clear = 0; t->kd_dark = 0;
+                t->kd_n = 0; t->kd_skip = 0;
+                t->kd_min = 0; t->kd_max = 0;
+                t->kd_req = (u8)KDARK_SAMPLES;
 
-            CLI_PRINTF_N("lux: measuring k = VIS/(R+G+B) over %u samples",
-                         CAL_SAMPLES);
-            CLI_PRINTF_N("     !! NEEDS A LIT BENCH. In the dark k collapses to"
-                         " 1/3 (measured 0.374 in a");
-            CLI_PRINTF_N("     closed box against ~1.07 under real light), and"
-                         " below that it does not");
-            CLI_PRINTF_N("     converge at all - the command gives up after %u"
-                         " unusable samples.", CAL_SKIP_MAX);
-            CLI_PRINTF_N("     hold the light STEADY - k follows the spectrum");
-            CLI_PRINTF_N("     ~%u s, then the sensors park again",
-                         (CAL_SAMPLES * (exposure_ms(&s_sensor[0]) + CONV_TIME_MS)
-                          + 999u) / 1000u);
-            return true;
-        }
-
-        /* ── "lux meas" / "lux meas_cl" — the mixed signal/DARK acquisition ──
-         *
-         * Arms BOTH sensors, like "lux dark" and "lux setup": the two are only
-         * worth comparing when they run the same method.
-         *
-         * The two spellings differ in ONE thing, the channel the dark is
-         * subtracted from: "meas" corrects VIS (channel 2), "meas_cl" corrects
-         * CLEAR (channel 6), which has five photodiodes against three and no
-         * filter at all - the widest detector on the part. Everything else -
-         * div, Kdark, discard, the forced refresh, the row - is shared, so the
-         * two are one block rather than two that drift apart.
-         *
-         * ⚠️ "meas_cl" MUST be tested first: ca_strncmp(sub, "meas", 4) matches
-         * the longer word too, so the order of these two tests is the whole
-         * dispatch. Reversed, "lux meas_cl" would silently arm the VIS mode and
-         * report success.
-         *
-         * ⚠️ Kdark does NOT carry over between the two. In VIS mode signal and
-         * dark share channel 2; in CLEAR mode they do not, and the coefficient
-         * has to absorb the mismatch between two covered photodiodes and five
-         * clear ones. Re-measure it after switching - see MEAS_CH_CLEAR.
-         *
-         * There is no "lux meas off". The mode belongs to a run, not to the
-         * configuration, so "lux stop" leaves it - one way out instead of two
-         * that can disagree about what the sensor is doing.
-         *
-         * ⚠️ Arming does NOT start the sensors. Entering the mode and beginning
-         * a capture are separate decisions, exactly as they are for "lux cal":
-         * "lux meas 10 1000" then "lux start". */
-        bool is_meas_cl = (ca_strncmp(sub, "meas_cl", 7) == 0);
-        if (is_meas_cl || ca_strncmp(sub, "meas", 4) == 0) {
-            const u8    mch  = is_meas_cl ? (u8)MEAS_CH_CLEAR : (u8)MEAS_CH_VIS;
-            const char *mname = is_meas_cl ? "meas_cl" : "meas";
-            const char *mchn  = is_meas_cl ? "CLEAR" : "VIS";
-            const char *marg = ca_skip_sp(sub + (is_meas_cl ? 7u : 4u));
-
-            if (!*marg) {
-                for (u8 i = 0; i < SENSOR_COUNT; i++) {
-                    const sensor_ctx_t *t = &s_sensor[i];
-                    /* Reports the channel the sensor is actually armed on,
-                     * not the one this invocation named: "lux meas_cl" with no
-                     * arguments is a query, and answering it with its own
-                     * spelling instead of the mode in force would hide exactly
-                     * the mistake it is asked about. */
-                    CLI_PRINTF_N("lux %s: meas %s  chan=%s  div=%u  Kdark=%u.%03u"
-                                 "  discard=%u",
-                                 t->label, t->meas_on ? "ON" : "off",
-                                 (t->meas_ch == MEAS_CH_CLEAR) ? "CLEAR" : "VIS",
-                                 (u32)t->meas_div,
-                                 t->k_dark / K_DARK_SCALE,
-                                 t->k_dark % K_DARK_SCALE,
-                                 (u32)t->meas_discard);
-                }
-                CLI_PRINTF_N("usage: lux %s <div> [discard]   (both sensors)",
-                             mname);
-                CLI_PRINTF_N("       div     = signal samples between two dark reads");
-                CLI_PRINTF_N("       Kdark is NOT an argument here: it is"
-                             " per-part, see \"lux kdark\"");
-                CLI_PRINTF_N("       discard = frames binned after each SEL_PD switch,"
-                             " 0..%u (default %u)", MEAS_DISCARD_MAX,
-                             MEAS_SWITCH_DISCARD);
-                CLI_PRINTF_N("       N%s = norm(%s - Kdark*dark); lux stop leaves the mode",
-                             is_meas_cl ? "CLR" : "VIS", mchn);
-                CLI_PRINTF_N("       meas    = VIS (ch2, 3 diodes, IR-filtered)");
-                CLI_PRINTF_N("       meas_cl = CLEAR (ch6, 5 diodes, no filter) -"
-                             " wider band, larger count");
-                CLI_PRINTF_N("       Kdark does NOT carry over between the two");
-                return true;
-            }
-
-            u16 mate = 0;
-            i32 mdiv = ca_strtol_index(marg, 10, &mate);
-            if (mate == 0u || mdiv < (i32)MEAS_DIV_MIN || mdiv > (i32)MEAS_DIV_MAX) {
-                CLI_PRINTF_N("lux: div must be %u..%u (visible samples per dark read)",
-                             MEAS_DIV_MIN, MEAS_DIV_MAX);
-                return true;
-            }
-
-            /* ⚠️ THERE IS NO Kdark ARGUMENT ANY MORE. It was mandatory, then
-             * optional, and both were wrong once "lux kdark cal" could measure
-             * the coefficient per part: a positional argument in the middle of
-             * this command could only ever set BOTH sensors to one value, and
-             * it sat exactly where a reader expects the discard.
-             *
-             * That is not a hypothetical. On HW 2026-09-02 "lux meas_cl 1 0 3"
-             * was typed to test the discard and silently zeroed two measured
-             * calibrations, because 0 landed in the Kdark slot. The capture
-             * that came back was a different experiment from the one intended,
-             * and nothing in it said so.
-             *
-             * Kdark is set by "lux kdark <1|2> <value>" and measured by
-             * "lux kdark cal". This command no longer touches it.
-             *
-             * So: "lux meas <div> [discard]", two arguments at most. */
-            marg = ca_skip_sp(marg + mate);
-            mate = 0;
-            i32 mdisc = (i32)s_sensor[0].meas_discard;
-            if (*marg) {
-                mdisc = ca_strtol_index(marg, 10, &mate);
-                if (mate == 0u || mdisc < 0 || mdisc > (i32)MEAS_DISCARD_MAX) {
-                    CLI_PRINTF_N("lux: discard must be 0..%u", MEAS_DISCARD_MAX);
-                    return true;
-                }
-            }
-
-            for (u8 i = 0; i < SENSOR_COUNT; i++) {
-                sensor_ctx_t *t = &s_sensor[i];
-                t->meas_div     = (u16)mdiv;
-                t->meas_discard = (u8)mdisc;
-                /* k_dark is deliberately NOT touched here - see above. */
-                t->meas_ch      = mch;
-                t->meas_on      = true;
-                /* The mode owns SEL_PD: between dark reads channel 2 must be on
-                 * the VISIBLE diodes. In VIS mode that is where the signal is
-                 * read from; in CLEAR mode it is not, but channel 2 must still
-                 * come back off the covered diodes or the NEXT dark read would
-                 * find it already there and measure nothing new. Either way the
-                 * resting state is the same one. A running task applies this at
-                 * its next frame; a parked one gets it from vd_configure(). */
-                t->dark_req       = false;
-                /* Nothing held is trustworthy across an arming: div and Kdark
-                 * have just changed, and so may the settings since the last
-                 * dark. The first sample of the new mode gets a fresh one. */
-                t->dark_hold_ok   = false;
-                t->dark_forced    = true;
-                t->vis_since_dark = 0;
+                t->kd_stop = true;
+                t->running  = true;
             }
 
             {
-                u32 ms = SAMPLE_PERIOD_MS(&s_sensor[0]);
-                CLI_PRINTF_N("lux: mixed acquisition armed on both sensors,"
-                             " correcting %s", mchn);
-                CLI_PRINTF_N("     1 dark every %d %s samples", (int)mdiv, mchn);
-                for (u8 i = 0; i < SENSOR_COUNT; i++)
-                    CLI_PRINTF_N("     %s: Kdark=%u.%03u  (per-part, set by"
-                                 " \"lux kdark\")", s_sensor[i].label,
-                                 s_sensor[i].k_dark / K_DARK_SCALE,
-                                 s_sensor[i].k_dark % K_DARK_SCALE);
-                if (is_meas_cl)
-                    CLI_PRINTF_N("     Kdark measured for VIS does NOT apply here:"
-                                 " 2 covered diodes vs 5 clear");
-
-                /* ⚠️ Warn at ARMING, not after a run of zeros. This mode works
-                 * at the floor, and the part reports nothing below
-                 * ALS_MIN_REPORTED - so at low gain with the autogain off it
-                 * produces a table of zeros that looks like a fault and is not
-                 * one. Caught twice on HW before it was named, both times
-                 * straight after "lux kdark cal" put the sensors back on the
-                 * settings they had before it borrowed them. */
-                for (u8 i = 0; i < SENSOR_COUNT; i++) {
-                    const sensor_ctx_t *t = &s_sensor[i];
-                    if (t->auto_gain || t->gain_idx <= MEAS_GAIN_IDX_WARN)
-                        continue;
-                    {
-                        u32 gw, gf; gain_text(t->gain_idx, &gw, &gf);
-                        CLI_PRINTF_N("     !! %s is at %u.%02ux with autogain OFF"
-                                     " - the part reports nothing", t->label, gw, gf);
-                        CLI_PRINTF_N("        below %u counts (par 3.3.3), so at"
-                                     " the floor every column reads 0.",
-                                     ALS_MIN_REPORTED);
-                        CLI_PRINTF_N("        Raise the gain, or turn the autogain"
-                                     " on in \"lux setup\".");
-                    }
-                }
-                CLI_PRINTF_N("     discard=%d: a dark refresh costs %u frames"
-                             " (~%u ms), forced on every gain change",
-                             (int)mdisc, 2u * ((u32)mdisc + 1u),
-                             2u * ((u32)mdisc + 1u) * ms);
-                if (s_sensor[0].running || s_sensor[1].running) {
-                    /* The table changes shape mid-capture, so the new column
-                     * names have to go out now - the header is otherwise only
-                     * printed when a sensor starts. */
-                    print_header();
-                } else {
-                    CLI_PRINTF_N("     now \"lux start\"");
-                }
+                u32 gw, gf; gain_text(0u, &gw, &gf);
+                u32 ms = STEPS_TO_MS(EXTIME_STEPS_MAX) + CONV_TIME_MS;
+                CLI_PRINTF_N("lux: measuring Kdark = CLEAR/DARK over %u"
+                             " samples, on RAW counts", KDARK_SAMPLES);
+                CLI_PRINTF_N("     at %u.%02ux / %u ms - the maximum. At"
+                             " 1.00x the dark reads 0 and there is",
+                             gw, gf, STEPS_TO_MS(EXTIME_STEPS_MAX));
+                CLI_PRINTF_N("     nothing to take a ratio of; both settings"
+                             " are put back afterwards.");
+                CLI_PRINTF_N("     !! THE SENSORS MUST BE IN THE DARK. Any"
+                             " light lands on CLEAR and not on the");
+                CLI_PRINTF_N("     covered diodes, so it inflates the ratio."
+                             " At full gain room light lands near");
+                CLI_PRINTF_N("     50 and is refused - but DIM light is not"
+                             " caught, so close the box.");
+                CLI_PRINTF_N("     ~%u s, then the sensors park again",
+                             (KDARK_SAMPLES * ms + 999u) / 1000u);
             }
             return true;
         }
 
-        /* ── "lux kdark" — the dark coefficient, per sensor ─────────────────
-         *
-         *   lux kdark              show both
-         *   lux kdark <1|2> <val>  set one, x1000 (1200 = 1.200)
-         *   lux kdark cal          MEASURE it on both, in darkness
-         *
-         * ⚠️ Per SENSOR, unlike every other setting this application exposes.
-         * The rest are deliberately global - the two parts are only worth
-         * comparing when they run the same configuration - but Kdark is not a
-         * configuration, it is a per-part CALIBRATION, in the same family as
-         * cal_k. Measured 1.06 on A against 1.33 on B: one shared value cannot
-         * be right for both, and 1.200 was wrong for each in opposite
-         * directions.
-         *
-         * The "cal" form is the one to prefer. See KDARK_SAMPLES: it reads
-         * CLEAR and DARK out of the same frame, on RAW counts, which is the
-         * quantity meas_correct() actually subtracts - a ratio taken by hand
-         * off the printed columns carries the two channels\' OTP coefficients
-         * and comes out some 7% wrong. */
-        if (ca_strncmp(sub, "kdark", 5) == 0) {
-            const char *karg = ca_skip_sp(sub + 5);
-
-            if (!*karg) {
-                for (u8 i = 0; i < SENSOR_COUNT; i++)
-                    CLI_PRINTF_N("lux %s: Kdark=%u.%03u", s_sensor[i].label,
-                                 s_sensor[i].k_dark / K_DARK_SCALE,
-                                 s_sensor[i].k_dark % K_DARK_SCALE);
-                CLI_PRINTF_N("usage: lux kdark <1|2> <value>   set one, x1000"
-                             " (1200 = 1.200)");
-                CLI_PRINTF_N("       lux kdark cal             measure both,"
-                             " IN DARKNESS");
-                CLI_PRINTF_N("  Kdark = raw CLEAR / raw DARK, both from the same"
-                             " frame with channel 2");
-                CLI_PRINTF_N("  on the covered diodes. It is a per-PART number:"
-                             " do not copy it between sensors.");
-                return true;
-            }
-
-            /* ── "lux kdark cal" ───────────────────────────────────────────── */
-            if (ca_strncmp(karg, "cal", 3) == 0) {
-                /* Refused during the mixed acquisition for the same reason
-                 * "lux cal" is: that mode owns SEL_PD and drives channel 2 back
-                 * to the visible diodes between dark reads, so it would fight
-                 * the dark mode this measurement needs for every frame. */
-                if (s_sensor[0].meas_on || s_sensor[1].meas_on) {
-                    CLI_PRINTF_N("lux: the mixed acquisition owns channel 2 -"
-                                 " \"lux stop\" first, then \"lux kdark cal\"");
-                    return true;
-                }
-
-                /* ⚠️ Only on PARKED sensors, because this command changes gain
-                 * and exposure - and in this application those are written by
-                 * vd_configure() at start, exactly like the clamp. Refusing is
-                 * the same answer "lux setup" and "lux clamp" give, and for the
-                 * same reason: a setting that lands three commands later is how
-                 * a capture ends up describing settings it was not taken at. */
-                if (s_sensor[0].running || s_sensor[1].running) {
-                    CLI_PRINTF_N("lux: this sets gain and exposure itself -"
-                                 " \"lux stop\" first, then \"lux kdark cal\"");
-                    return true;
-                }
-
-                for (u8 i = 0; i < SENSOR_COUNT; i++) {
-                    sensor_ctx_t *t = &s_sensor[i];
-
-                    if (!t->up) {
-                        CLI_PRINTF_N("lux %s: no working I2C%u - cannot measure",
-                                     t->label, t->bus);
-                        continue;
-                    }
-                    if (t->kd_req) {
-                        CLI_PRINTF_N("lux %s: already measuring Kdark", t->label);
-                        continue;
-                    }
-
-                    /* Channel 2 must be on the COVERED diodes for the whole
-                     * measurement - the opposite of what "lux cal" needs, and
-                     * restored the same way when it finishes. */
-                    t->kd_dark_was = t->dark_req;
-                    t->dark_req    = true;
-
-                    /* Maximum sensitivity for the duration, restored when it
-                     * finishes or gives up. See kd_gain_was: at unity gain the
-                     * dark is not merely small, it is zero, and the operator
-                     * should not have to know that before running a command
-                     * whose whole job is to measure the dark. */
-                    t->kd_gain_was = t->gain_idx;   t->gain_idx  = 0u;
-                    t->kd_exp_was  = t->exp_steps;  t->exp_steps = EXTIME_STEPS_MAX;
-                    t->kd_auto_was = t->auto_gain;  t->auto_gain = false;
-
-                    t->kd_clear = 0; t->kd_dark = 0;
-                    t->kd_n = 0; t->kd_skip = 0;
-                    t->kd_min = 0; t->kd_max = 0;
-                    t->kd_req = (u8)KDARK_SAMPLES;
-
-                    t->kd_stop = true;
-                    t->running  = true;
-                }
-
-                {
-                    u32 gw, gf; gain_text(0u, &gw, &gf);
-                    u32 ms = STEPS_TO_MS(EXTIME_STEPS_MAX) + CONV_TIME_MS;
-                    CLI_PRINTF_N("lux: measuring Kdark = CLEAR/DARK over %u"
-                                 " samples, on RAW counts", KDARK_SAMPLES);
-                    CLI_PRINTF_N("     at %u.%02ux / %u ms - the maximum. At"
-                                 " 1.00x the dark reads 0 and there is",
-                                 gw, gf, STEPS_TO_MS(EXTIME_STEPS_MAX));
-                    CLI_PRINTF_N("     nothing to take a ratio of; both settings"
-                                 " are put back afterwards.");
-                    CLI_PRINTF_N("     !! THE SENSORS MUST BE IN THE DARK. Any"
-                                 " light lands on CLEAR and not on the");
-                    CLI_PRINTF_N("     covered diodes, so it inflates the ratio."
-                                 " At full gain room light lands near");
-                    CLI_PRINTF_N("     50 and is refused - but DIM light is not"
-                                 " caught, so close the box.");
-                    CLI_PRINTF_N("     ~%u s, then the sensors park again",
-                                 (KDARK_SAMPLES * ms + 999u) / 1000u);
-                }
-                return true;
-            }
-
-            /* ── "lux kdark <1|2> <value>" ─────────────────────────────────── */
-            u16 kate = 0;
-            i32 kwho = ca_strtol_index(karg, 10, &kate);
-            if (kate == 0u || kwho < 1 || kwho > (i32)SENSOR_COUNT) {
-                CLI_PRINTF_N("lux: which sensor? 1..%u, or \"cal\" to measure",
-                             SENSOR_COUNT);
-                return true;
-            }
-
-            karg = ca_skip_sp(karg + kate);
-            kate = 0;
-            i32 kval = ca_strtol_index(karg, 10, &kate);
-            if (kate == 0u || kval < 0 || kval > (i32)K_DARK_MAX) {
-                CLI_PRINTF_N("lux: Kdark must be 0..%u, x1000 (1000 = 1.000)",
-                             K_DARK_MAX);
-                return true;
-            }
-
-            {
-                sensor_ctx_t *t = &s_sensor[kwho - 1];
-                t->k_dark = (u32)kval;
-                CLI_PRINTF_N("lux %s: Kdark -> %u.%03u", t->label,
-                             t->k_dark / K_DARK_SCALE, t->k_dark % K_DARK_SCALE);
-                /* The other sensor is deliberately NOT touched, and saying so
-                 * matters: every other setting in this application applies to
-                 * both, so silence here would read as "it did both". */
-                CLI_PRINTF_N("     the other sensor is unchanged - Kdark is"
-                             " per-part");
-            }
+        /* ── "lux kdark <1|2> <value>" ─────────────────────────────────── */
+        u16 kate = 0;
+        i32 kwho = ca_strtol_index(karg, 10, &kate);
+        if (kate == 0u || kwho < 1 || kwho > (i32)SENSOR_COUNT) {
+            CLI_PRINTF_N("lux: which sensor? 1..%u, or \"cal\" to measure",
+                         SENSOR_COUNT);
             return true;
         }
 
-        /* ── "lux period [ms]" — the idle gap between measurements ──────────
-         *
-         * ALS_PERIOD (§4.3.5). Everything this application has measured so far
-         * ran at 0 - back-to-back frames - which is right for a bench and wrong
-         * for an always-on alarm: a threshold does not need a reading every
-         * 400 ms, and frames not taken are the cheapest power there is.
-         *
-         * ⚠️ It is the GAP, not the interval: the part integrates for EXTIME,
-         * then idles for the period, so the sample rate is set by the sum. That
-         * is why this is a separate knob from the exposure - the exposure also
-         * changes what each reading MEANS (its saturation ceiling, its noise),
-         * and the period changes only how often it is taken.
-         *
-         * ⚠️ Only on a PARKED sensor, for the same reason as "lux clamp": the
-         * register is written by vd_configure(). */
-        if (ca_strncmp(sub, "period", 6) == 0) {
-            const char *parg = ca_skip_sp(sub + 6);
-
-            if (!*parg) {
-                for (u8 i = 0; i < SENSOR_COUNT; i++) {
-                    const sensor_ctx_t *t = &s_sensor[i];
-                    CLI_PRINTF_N("lux %s: period %u ms (ALS_PERIOD=%u)"
-                                 "  -> ~%u ms per sample",
-                                 t->label, IM_STEPS_TO_MS(t->im_steps),
-                                 (u32)t->im_steps, SAMPLE_PERIOD_MS(t));
-                }
-                CLI_PRINTF_N("usage: lux period <ms>   (both sensors, applied at next start)");
-                CLI_PRINTF_N("       0 = no gap, back-to-back frames (the default)");
-                CLI_PRINTF_N("       step %u.%u ms, max %u ms",
-                             IM_STEP_US / 1000u, (IM_STEP_US % 1000u) / 100u,
-                             IM_STEPS_TO_MS(IM_STEPS_MAX));
-                CLI_PRINTF_N("       the gap is ADDED to the exposure, it does not"
-                             " replace it");
-                return true;
-            }
-
-            u16 pate = 0;
-            i32 pms  = ca_strtol_index(parg, 10, &pate);
-            if (pate == 0u || pms < 0 ||
-                (u32)pms > IM_STEPS_TO_MS(IM_STEPS_MAX)) {
-                CLI_PRINTF_N("lux: period must be 0..%u ms",
-                             IM_STEPS_TO_MS(IM_STEPS_MAX));
-                return true;
-            }
-
-            if (s_sensor[0].running || s_sensor[1].running) {
-                CLI_PRINTF_N("lux: the period is written at configuration time -"
-                             " \"lux stop\" first, then set it, then start");
-                return true;
-            }
-
-            /* Rounded to the nearest step, then reported back as the value that
-             * will actually be programmed rather than the one asked for: the
-             * step is 20.5 ms, so most requests are not representable and a
-             * command that echoed the request would be quietly lying. */
-            u32 psteps = IM_MS_TO_STEPS((u32)pms);
-            if (psteps > IM_STEPS_MAX) psteps = IM_STEPS_MAX;
-
-            for (u8 i = 0; i < SENSOR_COUNT; i++)
-                s_sensor[i].im_steps = (u8)psteps;
-
-            CLI_PRINTF_N("lux: period -> %u ms (ALS_PERIOD=%u) on both sensors,"
-                         " from the next start",
-                         IM_STEPS_TO_MS(psteps), psteps);
-            CLI_PRINTF_N("     ~%u ms per sample at the exposure in force",
-                         SAMPLE_PERIOD_MS(&s_sensor[0]));
+        karg = ca_skip_sp(karg + kate);
+        kate = 0;
+        i32 kval = ca_strtol_index(karg, 10, &kate);
+        if (kate == 0u || kval < 0 || kval > (i32)K_DARK_MAX) {
+            CLI_PRINTF_N("lux: Kdark must be 0..%u, x1000 (1000 = 1.000)",
+                         K_DARK_MAX);
             return true;
         }
 
-        /* ── "lux lx" — lux and colour temperature, one immediate reading ────
-         *
-         * The photometric conversion of LUX_MATRIX, applied to a single read
-         * taken here and now. This is the number the threshold comparator will
-         * eventually compare against, so it exists as its own command first:
-         * a comparator fed a quantity nobody has ever looked at is a comparator
-         * nobody can debug.
-         *
-         * ⚠️ It reads R, G and B, so it works in EITHER dark mode - channel 2 is
-         * not involved. That is the property that makes it the right input for
-         * the alarm: the dark measurement and the light measurement stop
-         * competing for the same channel.
-         *
-         * ⚠️ Uncalibrated in the absolute. See LUX_MATRIX: the coefficients are
-         * ST's, measured on ST's optical stack. Ratios and trends are sound,
-         * the absolute scale is only as good as the two stacks matching.
-         *
-         * ⚠️ Like "raw", this reads whatever the part last converted. On a
-         * PARKED sensor that is the final frame of the previous run, which may
-         * be minutes old - the value is real, its timestamp is not. */
-        if (ca_strncmp(sub, "lx", 2) == 0) {
+        {
+            sensor_ctx_t *t = &s_sensor[kwho - 1];
+            t->k_dark = (u32)kval;
+            CLI_PRINTF_N("lux %s: Kdark -> %u.%03u", t->label,
+                         t->k_dark / K_DARK_SCALE, t->k_dark % K_DARK_SCALE);
+            /* The other sensor is deliberately NOT touched, and saying so
+             * matters: every other setting in this application applies to
+             * both, so silence here would read as "it did both". */
+            CLI_PRINTF_N("     the other sensor is unchanged - Kdark is"
+                         " per-part");
+        }
+        return true;
+    }
+
+    /* ── "lux period [ms]" — the idle gap between measurements ──────────
+     *
+     * ALS_PERIOD (§4.3.5). Everything this application has measured so far
+     * ran at 0 - back-to-back frames - which is right for a bench and wrong
+     * for an always-on alarm: a threshold does not need a reading every
+     * 400 ms, and frames not taken are the cheapest power there is.
+     *
+     * ⚠️ It is the GAP, not the interval: the part integrates for EXTIME,
+     * then idles for the period, so the sample rate is set by the sum. That
+     * is why this is a separate knob from the exposure - the exposure also
+     * changes what each reading MEANS (its saturation ceiling, its noise),
+     * and the period changes only how often it is taken.
+     *
+     * ⚠️ Only on a PARKED sensor, for the same reason as "lux clamp": the
+     * register is written by vd_configure(). */
+    if (ca_strncmp(sub, "period", 6) == 0) {
+        const char *parg = ca_skip_sp(sub + 6);
+
+        if (!*parg) {
             for (u8 i = 0; i < SENSOR_COUNT; i++) {
-                lux_sample_t one = { 0 };
-                lux_photo_t  ph;
+                const sensor_ctx_t *t = &s_sensor[i];
+                CLI_PRINTF_N("lux %s: period %u ms (ALS_PERIOD=%u)"
+                             "  -> ~%u ms per sample",
+                             t->label, IM_STEPS_TO_MS(t->im_steps),
+                             (u32)t->im_steps, SAMPLE_PERIOD_MS(t));
+            }
+            CLI_PRINTF_N("usage: lux period <ms>   (both sensors, applied at next start)");
+            CLI_PRINTF_N("       0 = no gap, back-to-back frames (the default)");
+            CLI_PRINTF_N("       step %u.%u ms, max %u ms",
+                         IM_STEP_US / 1000u, (IM_STEP_US % 1000u) / 100u,
+                         IM_STEPS_TO_MS(IM_STEPS_MAX));
+            CLI_PRINTF_N("       the gap is ADDED to the exposure, it does not"
+                         " replace it");
+            return true;
+        }
 
-                if (!s_sensor[i].present) {
-                    CLI_PRINTF_N("lux %s: not present", s_sensor[i].label);
-                    continue;
-                }
-                if (!vd_read_channels(&s_sensor[i], &one)) {
-                    CLI_PRINTF_N("lux %s: read failed", s_sensor[i].label);
-                    continue;
-                }
-                if (!s_sensor[i].running)
-                    CLI_PRINTF_N("lux %s: sensor parked - this is the last frame"
-                                 " of the previous run", s_sensor[i].label);
+        u16 pate = 0;
+        i32 pms  = ca_strtol_index(parg, 10, &pate);
+        if (pate == 0u || pms < 0 ||
+            (u32)pms > IM_STEPS_TO_MS(IM_STEPS_MAX)) {
+            CLI_PRINTF_N("lux: period must be 0..%u ms",
+                         IM_STEPS_TO_MS(IM_STEPS_MAX));
+            return true;
+        }
 
-                /* ⚠️ counts[], not raw[]: ST feeds CountValue (post-OTP) to the
-                 * normalisation, and the per-channel coefficients differ, so
-                 * they do NOT factor out of a three-channel matrix product. */
-                if (!lux_photometric(one.counts, one.gain, one.exp_steps, &ph)) {
-                    CLI_PRINTF_N("lux %s: no photometric answer -"
-                                 " X+Y+Z <= 0 (too dark, or a spectrum the"
-                                 " matrix cannot represent)", s_sensor[i].label);
-                    CLI_PRINTF_N("       R=%u G=%u B=%u  gain=%u.%02ux exp=%u ms",
-                                 one.counts[CH_RED], one.counts[CH_GREEN],
-                                 one.counts[CH_BLUE],
-                                 one.gain / 256u, ((one.gain % 256u) * 100u) / 256u,
-                                 (u32)one.exp_ms);
-                    continue;
-                }
+        if (s_sensor[0].running || s_sensor[1].running) {
+            CLI_PRINTF_N("lux: the period is written at configuration time -"
+                         " \"lux stop\" first, then set it, then start");
+            return true;
+        }
 
-                CLI_PRINTF_N("lux %s: %u.%03u lx   x=0.%04u y=0.%04u",
-                             s_sensor[i].label,
-                             ph.lux_milli / 1000u, ph.lux_milli % 1000u,
-                             ph.x_ten_k, ph.y_ten_k);
-                if (ph.cct_ok)
-                    CLI_PRINTF_N("       cct %u K", ph.cct_k);
-                else
-                    CLI_PRINTF_N("       cct --  (outside McCamy's fit, or on the"
-                                 " singular line y=0.1858)");
-                CLI_PRINTF_N("       R=%u G=%u B=%u  gain=%u.%02ux exp=%u ms%s",
+        /* Rounded to the nearest step, then reported back as the value that
+         * will actually be programmed rather than the one asked for: the
+         * step is 20.5 ms, so most requests are not representable and a
+         * command that echoed the request would be quietly lying. */
+        u32 psteps = IM_MS_TO_STEPS((u32)pms);
+        if (psteps > IM_STEPS_MAX) psteps = IM_STEPS_MAX;
+
+        for (u8 i = 0; i < SENSOR_COUNT; i++)
+            s_sensor[i].im_steps = (u8)psteps;
+
+        CLI_PRINTF_N("lux: period -> %u ms (ALS_PERIOD=%u) on both sensors,"
+                     " from the next start",
+                     IM_STEPS_TO_MS(psteps), psteps);
+        CLI_PRINTF_N("     ~%u ms per sample at the exposure in force",
+                     SAMPLE_PERIOD_MS(&s_sensor[0]));
+        return true;
+    }
+
+    /* ── "lux lx" — lux and colour temperature, one immediate reading ────
+     *
+     * The photometric conversion of LUX_MATRIX, applied to a single read
+     * taken here and now. This is the number the threshold comparator will
+     * eventually compare against, so it exists as its own command first:
+     * a comparator fed a quantity nobody has ever looked at is a comparator
+     * nobody can debug.
+     *
+     * ⚠️ It reads R, G and B, so it works in EITHER dark mode - channel 2 is
+     * not involved. That is the property that makes it the right input for
+     * the alarm: the dark measurement and the light measurement stop
+     * competing for the same channel.
+     *
+     * ⚠️ Uncalibrated in the absolute. See LUX_MATRIX: the coefficients are
+     * ST's, measured on ST's optical stack. Ratios and trends are sound,
+     * the absolute scale is only as good as the two stacks matching.
+     *
+     * ⚠️ Like "raw", this reads whatever the part last converted. On a
+     * PARKED sensor that is the final frame of the previous run, which may
+     * be minutes old - the value is real, its timestamp is not. */
+    if (ca_strncmp(sub, "lx", 2) == 0) {
+        for (u8 i = 0; i < SENSOR_COUNT; i++) {
+            lux_sample_t one = { 0 };
+            lux_photo_t  ph;
+
+            if (!s_sensor[i].present) {
+                CLI_PRINTF_N("lux %s: not present", s_sensor[i].label);
+                continue;
+            }
+            if (!vd_read_channels(&s_sensor[i], &one)) {
+                CLI_PRINTF_N("lux %s: read failed", s_sensor[i].label);
+                continue;
+            }
+            if (!s_sensor[i].running)
+                CLI_PRINTF_N("lux %s: sensor parked - this is the last frame"
+                             " of the previous run", s_sensor[i].label);
+
+            /* ⚠️ counts[], not raw[]: ST feeds CountValue (post-OTP) to the
+             * normalisation, and the per-channel coefficients differ, so
+             * they do NOT factor out of a three-channel matrix product. */
+            if (!lux_photometric(one.counts, one.gain, one.exp_steps, &ph)) {
+                CLI_PRINTF_N("lux %s: no photometric answer -"
+                             " X+Y+Z <= 0 (too dark, or a spectrum the"
+                             " matrix cannot represent)", s_sensor[i].label);
+                CLI_PRINTF_N("       R=%u G=%u B=%u  gain=%u.%02ux exp=%u ms",
                              one.counts[CH_RED], one.counts[CH_GREEN],
                              one.counts[CH_BLUE],
                              one.gain / 256u, ((one.gain % 256u) * 100u) / 256u,
-                             (u32)one.exp_ms,
-                             one.saturated ? "  !! SATURATED" : "");
-            }
-            CLI_PRINTF_N("lux: absolute scale UNCALIBRATED (ST's matrix, ST's"
-                         " optics) - trust ratios, not the number");
-            return true;
-        }
-
-        /* ── "lux clamp <on|off>" — the DC clamp on channel 2 ────────────────
-         *
-         * The one control that decides whether the dark channel can carry dark
-         * current: with the clamp on, the analog chain removes it before the
-         * ADC and the channel reads 0 in darkness. See DC_CLAMP_ALL.
-         *
-         * ⚠️ Only on a PARKED sensor. The register is written by vd_configure(),
-         * so the setting takes effect at the next "lux start" - which is also
-         * what keeps it off the bus a running measurement task owns. Refused
-         * rather than deferred: a flag that silently applies three commands
-         * later is how a capture ends up describing settings it was not taken
-         * at. */
-        if (ca_strncmp(sub, "clamp", 5) == 0) {
-            const char *carg = ca_skip_sp(sub + 5);
-
-            if (!*carg) {
-                for (u8 i = 0; i < SENSOR_COUNT; i++)
-                    CLI_PRINTF_N("lux %s: channel 2 DC clamp %s%s",
-                                 s_sensor[i].label,
-                                 s_sensor[i].ch2_clamp ? "on" : "OFF",
-                                 s_sensor[i].ch2_clamp ? "" : "  (off the ST driver)");
-                CLI_PRINTF_N("usage: lux clamp <on|off>   (both sensors, applied at next start)");
-                CLI_PRINTF_N("  on  = DC_CLAMP_EN 0x%02X, what the ST driver writes",
-                             DC_CLAMP_ALL);
-                CLI_PRINTF_N("  off = 0x%02X: channel 2 unclamped, so its dark current"
-                             " survives to the ADC", DC_CLAMP_CH2_OFF);
-                return true;
+                             (u32)one.exp_ms);
+                continue;
             }
 
-            bool con;
-            if      (ca_strncmp(carg, "on",  2) == 0) con = true;
-            else if (ca_strncmp(carg, "off", 3) == 0) con = false;
-            else { CLI_PRINTF_N("usage: lux clamp <on|off>"); return true; }
-
-            if (s_sensor[0].running || s_sensor[1].running) {
-                CLI_PRINTF_N("lux: the clamp is written at configuration time -"
-                             " \"lux stop\" first, then set it, then start");
-                return true;
-            }
-
-            for (u8 i = 0; i < SENSOR_COUNT; i++) s_sensor[i].ch2_clamp = con;
-
-            CLI_PRINTF_N("lux: channel 2 DC clamp %s on both sensors, from the"
-                         " next start", con ? "on" : "OFF");
-            if (!con)
-                CLI_PRINTF_N("     !! off the ST driver: set_output_dark_enable()"
-                             " writes SEL_PD only and leaves the clamp on");
-            return true;
-        }
-
-        /* No sensor number: the header describes the columns, not a part. */
-        if (ca_strncmp(sub, "head", 4) == 0) { print_header(); return true; }
-
-        if (!is_start && !is_stop && !is_otp && !is_setup && !is_dark && !is_probe
-            && !is_bytes) {
-            /* "opt" is the transposition everyone makes - OTP is One-Time
-             * Programmable, not "option". Naming the mistake beats repeating
-             * the usage: an unchanged usage block gives no clue WHICH word was
-             * wrong, so the same typo just gets retyped. */
-            if (ca_strncmp(sub, "opt", 3) == 0)
-                CLI_PRINTF_N("lux: did you mean \"otp\"? (One-Time Programmable)");
+            CLI_PRINTF_N("lux %s: %u.%03u lx   x=0.%04u y=0.%04u",
+                         s_sensor[i].label,
+                         ph.lux_milli / 1000u, ph.lux_milli % 1000u,
+                         ph.x_ten_k, ph.y_ten_k);
+            if (ph.cct_ok)
+                CLI_PRINTF_N("       cct %u K", ph.cct_k);
             else
-                CLI_PRINTF_N("lux: unknown subcommand");
-            CLI_PRINTF_N("usage: lux start [1|2] | lux stop [1|2]   (no number = both)");
-            CLI_PRINTF_N("       lux otp <1|2>   | lux setup   (both sensors)");
-            CLI_PRINTF_N("       lux dark <on|off>  (both)  | lux probe <1|2> [ch]");
-            CLI_PRINTF_N("       lux bytes <1|2>  (raw channel bytes, diagnostic)");
-            CLI_PRINTF_N("       lux head  (reprint the column header)");
-            CLI_PRINTF_N("       lux cal   (calibrate VIS = k * (R+G+B))");
-            CLI_PRINTF_N("       lux meas <div> <Kdark> [discard]  (mixed VIS/DARK)");
-            CLI_PRINTF_N("       lux clamp <on|off>  (DC clamp on channel 2)");
-            return true;
+                CLI_PRINTF_N("       cct --  (outside McCamy's fit, or on the"
+                             " singular line y=0.1858)");
+            CLI_PRINTF_N("       R=%u G=%u B=%u  gain=%u.%02ux exp=%u ms%s",
+                         one.counts[CH_RED], one.counts[CH_GREEN],
+                         one.counts[CH_BLUE],
+                         one.gain / 256u, ((one.gain % 256u) * 100u) / 256u,
+                         (u32)one.exp_ms,
+                         one.saturated ? "  !! SATURATED" : "");
         }
-
-        u32 skip = is_start ? 5u : is_stop ? 4u : is_otp ? 3u : is_dark ? 4u
-                 : is_probe ? 5u : is_bytes ? 5u : 5u;
-        const char *arg = ca_skip_sp(sub + skip);
-
-        /* "lux start" / "lux stop" with no number act on BOTH, to match the
-         * common setup: the usual thing to want is the pair running under the
-         * same settings, and naming each one in turn is just ceremony. */
-        if ((is_start || is_stop) && !*arg) {
-            for (u8 i = 0; i < SENSOR_COUNT; i++) {
-                if (is_start) lux_start_one(i);
-                else          lux_stop_one(i);
-            }
-            return true;
-        }
-
-        u16 ate = 0;
-        i32 n   = ca_strtol_index(arg, 10, &ate);
-
-        /* ⚠️ "lux setup" and "lux dark" configure BOTH sensors, so the number
-         * selects nothing - it survives only because the older syntax had it.
-         * Both forms must work:
-         *      lux dark on        lux dark 1 on
-         *      lux setup          lux setup 1
-         * ca_strtol_index returns 0 with ate=0 when there is no number, so a
-         * missing one is told apart from a bad one by how much it consumed -
-         * not by the value, which would make "lux dark 0 on" look valid. */
-        if ((is_setup || is_dark) && ate == 0u) {
-            n = 1;                      /* any index: the action covers both */
-        } else if (n < 1 || n > (i32)SENSOR_COUNT) {
-            CLI_PRINTF_N("lux: sensor must be 1 or 2");
-            return true;
-        }
-
-        sensor_ctx_t *s = &s_sensor[n - 1];
-        const char *opt = ca_skip_sp(arg + ate);
-
-        if (is_probe) {
-            i32 ch = *opt ? ca_strtol(opt, 10) : 1;   /* channel 2 by default */
-            if (ch < 0 || ch >= (i32)ALS_CHANNELS) {
-                CLI_PRINTF_N("lux: channel must be 0..%u (0=red 1=vis 2=blue"
-                             " 3=green 4=IR 5=clear)", ALS_CHANNELS - 1u);
-                return true;
-            }
-            if (s->probe_req) {
-                CLI_PRINTF_N("lux %s: a sweep is already queued", s->label);
-                return true;
-            }
-            if (!s->up) {
-                CLI_PRINTF_N("lux %s: no working I2C%u", s->label, s->bus);
-                return true;
-            }
-
-            s->probe_req = (u8)(ch + 1);
-
-            /* The sweep needs running frames, so start the sensor if it is
-             * parked - and park it again afterwards, leaving the bench as it
-             * was found. One already running is left running. */
-            if (!s->running) {
-                s->probe_stop = true;
-                s->running    = true;
-            } else {
-                s->probe_stop = false;
-            }
-            CLI_PRINTF_N("lux %s: sweeping SEL_PD on channel %d (%s), ~%u s%s",
-                         s->label, (int)ch, CH_NAME[ch],
-                         (PROBE_COUNT * 2u * (exposure_ms(s) + CONV_TIME_MS)) / 1000u,
-                         s->probe_stop ? " (starting the sensor for it)" : "");
-            CLI_PRINTF_N("     no samples while it runs%s",
-                         s->probe_stop ? ", then it parks again" : "");
-            return true;
-        }
-
-        if (is_bytes) {
-            if (s->bytes_req) {
-                CLI_PRINTF_N("lux %s: a byte dump is already queued", s->label);
-                return true;
-            }
-            if (!s->up) {
-                CLI_PRINTF_N("lux %s: no working I2C%u", s->label, s->bus);
-                return true;
-            }
-
-            s->bytes_req = true;
-
-            /* Needs running frames, like the sweep: start a parked sensor and
-             * put it back afterwards, so the bench is left as it was found. */
-            if (!s->running) {
-                s->bytes_stop = true;
-                s->running    = true;
-            } else {
-                s->bytes_stop = false;
-            }
-            CLI_PRINTF_N("lux %s: dumping raw channel bytes, %u frames, ~%u s%s",
-                         s->label, BYTES_FRAMES,
-                         (BYTES_FRAMES * (exposure_ms(s) + CONV_TIME_MS) + 999u) / 1000u,
-                         s->bytes_stop ? " (starting the sensor for it)" : "");
-            CLI_PRINTF_N("     no samples while it runs%s",
-                         s->bytes_stop ? ", then it parks again" : "");
-            return true;
-        }
-
-        if (is_dark) {
-            /* ⚠️ The mixed acquisition owns SEL_PD: it switches channel 2 in and
-             * out on its own cadence. A static mode set from here would either
-             * be undone at the next refresh or, worse, hold channel 2 on the
-             * covered diodes while every row still called it VIS. */
-            if (s_sensor[0].meas_on || s_sensor[1].meas_on) {
-                CLI_PRINTF_N("lux: the mixed acquisition drives channel 2 itself"
-                             " - dark mode is not settable while it runs");
-                CLI_PRINTF_N("     \"lux stop\" leaves the mode");
-                return true;
-            }
-
-            /* Only sets the request: the measurement task applies it at a
-             * frame boundary, so the CLI never writes SEL_PD while the task is
-             * mid-transaction on that bus. Takes up to one exposure. */
-            if (!*opt) {
-                CLI_PRINTF_N("lux %s: channel 2 is on the %s photodiodes",
-                             s->label, s->dark_mode ? "COVERED (dark)" : "visible");
-                CLI_PRINTF_N("usage: lux dark <on|off>   (applies to both sensors)");
-                return true;
-            }
-            bool on;
-            if (ca_strncmp(opt, "on", 2) == 0)       on = true;
-            else if (ca_strncmp(opt, "off", 3) == 0) on = false;
-            else { CLI_PRINTF_N("usage: lux dark <on|off>   (both sensors)"); return true; }
-
-            /* Both sensors, like the menu entry: the dark reference is only
-             * worth reading if the two are configured the same way. The sensor
-             * number stays in the syntax so the command reads the same as the
-             * others, but it selects nothing - both are set. */
-            for (u8 i = 0; i < SENSOR_COUNT; i++) {
-                sensor_ctx_t *t = &s_sensor[i];
-                t->dark_req = on;
-                if (t->running) continue;       /* its own task applies it */
-                if (!vd_set_dark_mode(t, on))
-                    CLI_PRINTF_N("lux %s: SEL_PD write failed - mode unchanged",
-                                 t->label);
-            }
-            CLI_PRINTF_N("lux: dark mode %s on both sensors%s", on ? "on" : "off",
-                         (s_sensor[0].running || s_sensor[1].running)
-                             ? " (running ones at their next frame)" : "");
-            if (on)
-                CLI_PRINTF_N("     channel 2 becomes DARK - there is no vis reading while it is on");
-            return true;
-        }
-
-        if (is_otp) {
-            otp_report(s, (int)n);
-            return true;
-        }
-
-        if (is_setup) {
-            /* Configuring means writing to the part, and the measurement task
-             * owns that bus while it runs. Same rule as "scan": ask for a stop
-             * rather than reaching into a live transaction from another thread.
-             * Refuse at the door, not per entry - a menu that opens and then
-             * rejects every choice is worse than one that will not open.
-             *
-             * ⚠️ EVERY sensor must be stopped, not just the one named: the
-             * settings are common now, so opening the menu on a parked sensor
-             * would otherwise reconfigure a running one from the CLI thread. */
-            for (u8 i = 0; i < SENSOR_COUNT; i++) {
-                if (s_sensor[i].running) {
-                    CLI_PRINTF_N("lux: stop every sensor first - %s is running"
-                                 " (lux stop %u)",
-                                 s_sensor[i].label, (u32)(i + 1u));
-                    CLI_PRINTF_N("     setup is common to both, so both must be idle");
-                    return true;
-                }
-            }
-            if (*opt) {
-                /* The menu is the interface now: a trailing word would be an
-                 * old-syntax habit, and silently ignoring it would look like
-                 * it had been applied. */
-                CLI_PRINTF_N("lux setup takes no arguments - opening the menu"
-                             " (it configures both sensors)");
-            }
-            s_menu_s = (u8)(n - 1);
-            s_menu   = MENU_TOP;
-            menu_show(s);
-            return true;
-        }
-
-        if (is_start) { lux_start_one((u8)(n - 1)); return true; }
-
-        /* is_stop */
-        lux_stop_one((u8)(n - 1));
+        CLI_PRINTF_N("lux: absolute scale UNCALIBRATED (ST's matrix, ST's"
+                     " optics) - trust ratios, not the number");
         return true;
     }
 
-    if (ca_strncmp(p, "reg", 3) == 0) {
-        /* Raw register access on sensor B, for finding what the datasheet does
-         * not document. §4.1 says the registers "should be accessed only
-         * through the VD6283TX software driver", which is precisely why a
-         * bare-metal port needs a way to probe them by hand.
-         *
-         * Looking for the DARK bit: STALS.h documents the control as "dark
-         * count will be output on channel 2", so the bit to find is the one
-         * that makes CH2 (normally visible) stop following the light. Its
-         * signature is unmistakable - cover the sensor and CH2 does NOT move,
-         * because that photodiode is covered by construction.
-         * Candidates: the RESERVED bits of CHANNEL6_ENABLE (0x2D) and of
-         * ALS_CHANNEL_ENABLE (0x2E), both declared R/W. */
-        const char *a = ca_skip_sp(p + 3);
-        if (!*a) {
-            CLI_PRINTF_N("usage: reg <addr> [value]   (hex, sensor B)");
-            CLI_PRINTF_N("  reg 2D        read  CHANNEL6_ENABLE");
-            CLI_PRINTF_N("  reg 2D 03     write bit0|bit1 and see if CH2 freezes");
+    /* ── "lux clamp <on|off>" — the DC clamp on channel 2 ────────────────
+     *
+     * The one control that decides whether the dark channel can carry dark
+     * current: with the clamp on, the analog chain removes it before the
+     * ADC and the channel reads 0 in darkness. See DC_CLAMP_ALL.
+     *
+     * ⚠️ Only on a PARKED sensor. The register is written by vd_configure(),
+     * so the setting takes effect at the next "lux start" - which is also
+     * what keeps it off the bus a running measurement task owns. Refused
+     * rather than deferred: a flag that silently applies three commands
+     * later is how a capture ends up describing settings it was not taken
+     * at. */
+    if (ca_strncmp(sub, "clamp", 5) == 0) {
+        const char *carg = ca_skip_sp(sub + 5);
+
+        if (!*carg) {
+            for (u8 i = 0; i < SENSOR_COUNT; i++)
+                CLI_PRINTF_N("lux %s: channel 2 DC clamp %s%s",
+                             s_sensor[i].label,
+                             s_sensor[i].ch2_clamp ? "on" : "OFF",
+                             s_sensor[i].ch2_clamp ? "" : "  (off the ST driver)");
+            CLI_PRINTF_N("usage: lux clamp <on|off>   (both sensors, applied at next start)");
+            CLI_PRINTF_N("  on  = DC_CLAMP_EN 0x%02X, what the ST driver writes",
+                         DC_CLAMP_ALL);
+            CLI_PRINTF_N("  off = 0x%02X: channel 2 unclamped, so its dark current"
+                         " survives to the ADC", DC_CLAMP_CH2_OFF);
             return true;
         }
-        u16 idx = 0;
-        u32 addr = (u32)ca_strtol_index(a, 16, &idx);
-        const char *v = ca_skip_sp(a + idx);
-        sensor_ctx_t *s = &s_sensor[1];        /* bus B: the one with a sensor */
 
-        if (*v) {
-            u32 val = (u32)ca_strtol(v, 16);
-            if (vd_write_reg(s->bus, (u8)addr, (u8)val))
-                CLI_PRINTF_N("reg 0x%02X <- 0x%02X", addr, val);
-            else
-                CLI_PRINTF_N("reg 0x%02X: write failed", addr);
+        bool con;
+        if      (ca_strncmp(carg, "on",  2) == 0) con = true;
+        else if (ca_strncmp(carg, "off", 3) == 0) con = false;
+        else { CLI_PRINTF_N("usage: lux clamp <on|off>"); return true; }
+
+        if (s_sensor[0].running || s_sensor[1].running) {
+            CLI_PRINTF_N("lux: the clamp is written at configuration time -"
+                         " \"lux stop\" first, then set it, then start");
+            return true;
+        }
+
+        for (u8 i = 0; i < SENSOR_COUNT; i++) s_sensor[i].ch2_clamp = con;
+
+        CLI_PRINTF_N("lux: channel 2 DC clamp %s on both sensors, from the"
+                     " next start", con ? "on" : "OFF");
+        if (!con)
+            CLI_PRINTF_N("     !! off the ST driver: set_output_dark_enable()"
+                         " writes SEL_PD only and leaves the clamp on");
+        return true;
+    }
+
+    /* No sensor number: the header describes the columns, not a part. */
+    if (ca_strncmp(sub, "head", 4) == 0) { print_header(); return true; }
+
+    if (!is_start && !is_stop && !is_otp && !is_setup && !is_dark && !is_probe
+        && !is_bytes) {
+        /* "opt" is the transposition everyone makes - OTP is One-Time
+         * Programmable, not "option". Naming the mistake beats repeating
+         * the usage: an unchanged usage block gives no clue WHICH word was
+         * wrong, so the same typo just gets retyped. */
+        if (ca_strncmp(sub, "opt", 3) == 0)
+            CLI_PRINTF_N("lux: did you mean \"otp\"? (One-Time Programmable)");
+        else
+            CLI_PRINTF_N("lux: unknown subcommand");
+        CLI_PRINTF_N("usage: lux start [1|2] | lux stop [1|2]   (no number = both)");
+        CLI_PRINTF_N("       lux otp <1|2>   | lux setup   (both sensors)");
+        CLI_PRINTF_N("       lux dark <on|off>  (both)  | lux probe <1|2> [ch]");
+        CLI_PRINTF_N("       lux bytes <1|2>  (raw channel bytes, diagnostic)");
+        CLI_PRINTF_N("       lux head  (reprint the column header)");
+        CLI_PRINTF_N("       lux cal   (calibrate VIS = k * (R+G+B))");
+        CLI_PRINTF_N("       lux meas <div> <Kdark> [discard]  (mixed VIS/DARK)");
+        CLI_PRINTF_N("       lux clamp <on|off>  (DC clamp on channel 2)");
+        return true;
+    }
+
+    u32 skip = is_start ? 5u : is_stop ? 4u : is_otp ? 3u : is_dark ? 4u
+             : is_probe ? 5u : is_bytes ? 5u : 5u;
+    const char *arg = ca_skip_sp(sub + skip);
+
+    /* "lux start" / "lux stop" with no number act on BOTH, to match the
+     * common setup: the usual thing to want is the pair running under the
+     * same settings, and naming each one in turn is just ceremony. */
+    if ((is_start || is_stop) && !*arg) {
+        for (u8 i = 0; i < SENSOR_COUNT; i++) {
+            if (is_start) lux_start_one(i);
+            else          lux_stop_one(i);
+        }
+        return true;
+    }
+
+    u16 ate = 0;
+    i32 n   = ca_strtol_index(arg, 10, &ate);
+
+    /* ⚠️ "lux setup" and "lux dark" configure BOTH sensors, so the number
+     * selects nothing - it survives only because the older syntax had it.
+     * Both forms must work:
+     *      lux dark on        lux dark 1 on
+     *      lux setup          lux setup 1
+     * ca_strtol_index returns 0 with ate=0 when there is no number, so a
+     * missing one is told apart from a bad one by how much it consumed -
+     * not by the value, which would make "lux dark 0 on" look valid. */
+    if ((is_setup || is_dark) && ate == 0u) {
+        n = 1;                      /* any index: the action covers both */
+    } else if (n < 1 || n > (i32)SENSOR_COUNT) {
+        CLI_PRINTF_N("lux: sensor must be 1 or 2");
+        return true;
+    }
+
+    sensor_ctx_t *s = &s_sensor[n - 1];
+    const char *opt = ca_skip_sp(arg + ate);
+
+    if (is_probe) {
+        i32 ch = *opt ? ca_strtol(opt, 10) : 1;   /* channel 2 by default */
+        if (ch < 0 || ch >= (i32)ALS_CHANNELS) {
+            CLI_PRINTF_N("lux: channel must be 0..%u (0=red 1=vis 2=blue"
+                         " 3=green 4=IR 5=clear)", ALS_CHANNELS - 1u);
+            return true;
+        }
+        if (s->probe_req) {
+            CLI_PRINTF_N("lux %s: a sweep is already queued", s->label);
+            return true;
+        }
+        if (!s->up) {
+            CLI_PRINTF_N("lux %s: no working I2C%u", s->label, s->bus);
+            return true;
+        }
+
+        s->probe_req = (u8)(ch + 1);
+
+        /* The sweep needs running frames, so start the sensor if it is
+         * parked - and park it again afterwards, leaving the bench as it
+         * was found. One already running is left running. */
+        if (!s->running) {
+            s->probe_stop = true;
+            s->running    = true;
         } else {
-            u8 val = 0;
-            if (vd_read_regs(s->bus, (u8)addr, &val, 1u))
-                CLI_PRINTF_N("reg 0x%02X = 0x%02X", addr, val);
-            else
-                CLI_PRINTF_N("reg 0x%02X: read failed", addr);
+            s->probe_stop = false;
         }
+        CLI_PRINTF_N("lux %s: sweeping SEL_PD on channel %d (%s), ~%u s%s",
+                     s->label, (int)ch, CH_NAME[ch],
+                     (PROBE_COUNT * 2u * (exposure_ms(s) + CONV_TIME_MS)) / 1000u,
+                     s->probe_stop ? " (starting the sensor for it)" : "");
+        CLI_PRINTF_N("     no samples while it runs%s",
+                     s->probe_stop ? ", then it parks again" : "");
         return true;
     }
 
-    if (ca_strncmp(p, "scan", 4) == 0) {
-        /* Probe every 7-bit address on both buses. This is the test that tells
-         * a wiring fault from an address mismatch: if nothing answers anywhere,
-         * the problem is the bus (power, pull-ups, wires); if the part answers
-         * at an address other than 0x20, the address is the problem. */
+    if (is_bytes) {
+        if (s->bytes_req) {
+            CLI_PRINTF_N("lux %s: a byte dump is already queued", s->label);
+            return true;
+        }
+        if (!s->up) {
+            CLI_PRINTF_N("lux %s: no working I2C%u", s->label, s->bus);
+            return true;
+        }
+
+        s->bytes_req = true;
+
+        /* Needs running frames, like the sweep: start a parked sensor and
+         * put it back afterwards, so the bench is left as it was found. */
+        if (!s->running) {
+            s->bytes_stop = true;
+            s->running    = true;
+        } else {
+            s->bytes_stop = false;
+        }
+        CLI_PRINTF_N("lux %s: dumping raw channel bytes, %u frames, ~%u s%s",
+                     s->label, BYTES_FRAMES,
+                     (BYTES_FRAMES * (exposure_ms(s) + CONV_TIME_MS) + 999u) / 1000u,
+                     s->bytes_stop ? " (starting the sensor for it)" : "");
+        CLI_PRINTF_N("     no samples while it runs%s",
+                     s->bytes_stop ? ", then it parks again" : "");
+        return true;
+    }
+
+    if (is_dark) {
+        /* ⚠️ The mixed acquisition owns SEL_PD: it switches channel 2 in and
+         * out on its own cadence. A static mode set from here would either
+         * be undone at the next refresh or, worse, hold channel 2 on the
+         * covered diodes while every row still called it VIS. */
+        if (s_sensor[0].meas_on || s_sensor[1].meas_on) {
+            CLI_PRINTF_N("lux: the mixed acquisition drives channel 2 itself"
+                         " - dark mode is not settable while it runs");
+            CLI_PRINTF_N("     \"lux stop\" leaves the mode");
+            return true;
+        }
+
+        /* Only sets the request: the measurement task applies it at a
+         * frame boundary, so the CLI never writes SEL_PD while the task is
+         * mid-transaction on that bus. Takes up to one exposure. */
+        if (!*opt) {
+            CLI_PRINTF_N("lux %s: channel 2 is on the %s photodiodes",
+                         s->label, s->dark_mode ? "COVERED (dark)" : "visible");
+            CLI_PRINTF_N("usage: lux dark <on|off>   (applies to both sensors)");
+            return true;
+        }
+        bool on;
+        if (ca_strncmp(opt, "on", 2) == 0)       on = true;
+        else if (ca_strncmp(opt, "off", 3) == 0) on = false;
+        else { CLI_PRINTF_N("usage: lux dark <on|off>   (both sensors)"); return true; }
+
+        /* Both sensors, like the menu entry: the dark reference is only
+         * worth reading if the two are configured the same way. The sensor
+         * number stays in the syntax so the command reads the same as the
+         * others, but it selects nothing - both are set. */
         for (u8 i = 0; i < SENSOR_COUNT; i++) {
-            const sensor_ctx_t *s = &s_sensor[i];
-            if (!s->up) {
-                CLI_PRINTF_N("bus %s (I2C%u): not initialised", s->label, s->bus);
-                continue;
-            }
-            if (s->running) {
-                CLI_PRINTF_N("bus %s (I2C%u): stop it first (lux stop %u)",
-                             s->label, s->bus, (u32)(i + 1u));
-                continue;
-            }
-            CLI_PRINTF_N("bus %s (I2C%u): scanning...", s->label, s->bus);
-            u32 found = 0;
-            for (u8 a = 0x08u; a < 0x78u; a++) {
-                u8 reg = VD6283_DEVICE_ID, val = 0;
-                if (ca_i2c_write_read(s->bus, a, &reg, 1u, &val, 1u)) {
-                    found++;
-                    CLI_PRINTF_N("  0x%02X answers (reg0x00=0x%02X)%s", a, val,
-                                 a == VD6283_ADDR ? "  <- expected" : "");
-                }
-            }
-            if (found == 0)
-                CLI_PRINTF_N("  nothing answered: check 3V3, GND, the two wires"
-                             " and the pull-ups");
+            sensor_ctx_t *t = &s_sensor[i];
+            t->dark_req = on;
+            if (t->running) continue;       /* its own task applies it */
+            if (!vd_set_dark_mode(t, on))
+                CLI_PRINTF_N("lux %s: SEL_PD write failed - mode unchanged",
+                             t->label);
         }
+        CLI_PRINTF_N("lux: dark mode %s on both sensors%s", on ? "on" : "off",
+                     (s_sensor[0].running || s_sensor[1].running)
+                         ? " (running ones at their next frame)" : "");
+        if (on)
+            CLI_PRINTF_N("     channel 2 becomes DARK - there is no vis reading while it is on");
         return true;
     }
 
-    if (ca_strncmp(p, "map", 3) == 0) {
-        print_wiring_map();
+    if (is_otp) {
+        otp_report(s, (int)n);
         return true;
     }
 
-    if (ca_strncmp(p, "raw", 3) == 0) {
+    if (is_setup) {
+        /* Configuring means writing to the part, and the measurement task
+         * owns that bus while it runs. Same rule as "scan": ask for a stop
+         * rather than reaching into a live transaction from another thread.
+         * Refuse at the door, not per entry - a menu that opens and then
+         * rejects every choice is worse than one that will not open.
+         *
+         * ⚠️ EVERY sensor must be stopped, not just the one named: the
+         * settings are common now, so opening the menu on a parked sensor
+         * would otherwise reconfigure a running one from the CLI thread. */
         for (u8 i = 0; i < SENSOR_COUNT; i++) {
-            /* ⚠️ Zero-initialised, not just partly filled. vd_read_channels()
-             * writes the counts and the settings, and the assignments below
-             * cover the bookkeeping - but the row also reads dark_mode,
-             * vis_calc, cal_k, settling and now meas, and those were left as
-             * whatever the CLI stack happened to hold. A garbage dark_mode puts
-             * the measured value under the wrong column name; a garbage `meas`
-             * would send the row to the mixed-acquisition table outright.
-             * The explicit assignments stay: they say what the values MEAN
-             * here, which zero alone does not. */
-            lux_sample_t one = { 0 };
-            if (!s_sensor[i].present) {
-                CLI_PRINTF_N("sensor %s: not present", s_sensor[i].label);
-                continue;
-            }
-            if (vd_read_channels(&s_sensor[i], &one)) {
-                one.seq      = 0;
-                one.sensor   = i;
-                one.bus      = s_sensor[i].bus;
-                one.dropped     = s_sensor[i].dropped;
-                one.adjusted    = 0;
-                one.calibrating = 0;
-                /* "raw" is a single immediate read, outside any run: it has no
-                 * held dark and no cadence, so it always prints the full table
-                 * even while the mixed acquisition is armed. */
-                one.meas        = 0;
-                one.dark_mode   = s_sensor[i].dark_mode ? 1u : 0u;
-                print_sample(&one);
-            } else {
-                CLI_PRINTF_N("sensor %s: read failed", s_sensor[i].label);
+            if (s_sensor[i].running) {
+                CLI_PRINTF_N("lux: stop every sensor first - %s is running"
+                             " (lux stop %u)",
+                             s_sensor[i].label, (u32)(i + 1u));
+                CLI_PRINTF_N("     setup is common to both, so both must be idle");
+                return true;
             }
         }
+        if (*opt) {
+            /* The menu is the interface now: a trailing word would be an
+             * old-syntax habit, and silently ignoring it would look like
+             * it had been applied. */
+            CLI_PRINTF_N("lux setup takes no arguments - opening the menu"
+                         " (it configures both sensors)");
+        }
+        s_menu_s = (u8)(n - 1);
+        s_menu   = MENU_TOP;
+        ca_cli_capture_next(menu_capture);   /* the menu owns the next lines */
+        menu_show(s);
         return true;
     }
+
+    if (is_start) { lux_start_one((u8)(n - 1)); return true; }
+
+    /* is_stop */
+    lux_stop_one((u8)(n - 1));
+    return true;
+}
+
+static bool reg_cmd(c_str *args)
+{
+    const char *p = (*args)->data;
+    /* Raw register access on sensor B, for finding what the datasheet does
+     * not document. §4.1 says the registers "should be accessed only
+     * through the VD6283TX software driver", which is precisely why a
+     * bare-metal port needs a way to probe them by hand.
+     *
+     * Looking for the DARK bit: STALS.h documents the control as "dark
+     * count will be output on channel 2", so the bit to find is the one
+     * that makes CH2 (normally visible) stop following the light. Its
+     * signature is unmistakable - cover the sensor and CH2 does NOT move,
+     * because that photodiode is covered by construction.
+     * Candidates: the RESERVED bits of CHANNEL6_ENABLE (0x2D) and of
+     * ALS_CHANNEL_ENABLE (0x2E), both declared R/W. */
+    const char *a = ca_skip_sp(p);
+    if (!*a) {
+        CLI_PRINTF_N("usage: reg <addr> [value]   (hex, sensor B)");
+        CLI_PRINTF_N("  reg 2D        read  CHANNEL6_ENABLE");
+        CLI_PRINTF_N("  reg 2D 03     write bit0|bit1 and see if CH2 freezes");
+        return true;
+    }
+    u16 idx = 0;
+    u32 addr = (u32)ca_strtol_index(a, 16, &idx);
+    const char *v = ca_skip_sp(a + idx);
+    sensor_ctx_t *s = &s_sensor[1];        /* bus B: the one with a sensor */
+
+    if (*v) {
+        u32 val = (u32)ca_strtol(v, 16);
+        if (vd_write_reg(s->bus, (u8)addr, (u8)val))
+            CLI_PRINTF_N("reg 0x%02X <- 0x%02X", addr, val);
+        else
+            CLI_PRINTF_N("reg 0x%02X: write failed", addr);
+    } else {
+        u8 val = 0;
+        if (vd_read_regs(s->bus, (u8)addr, &val, 1u))
+            CLI_PRINTF_N("reg 0x%02X = 0x%02X", addr, val);
+        else
+            CLI_PRINTF_N("reg 0x%02X: read failed", addr);
+    }
+    return true;
+}
+
+static bool scan_cmd(c_str *args)
+{
+    (void)args;
+    /* Probe every 7-bit address on both buses. This is the test that tells
+     * a wiring fault from an address mismatch: if nothing answers anywhere,
+     * the problem is the bus (power, pull-ups, wires); if the part answers
+     * at an address other than 0x20, the address is the problem. */
+    for (u8 i = 0; i < SENSOR_COUNT; i++) {
+        const sensor_ctx_t *s = &s_sensor[i];
+        if (!s->up) {
+            CLI_PRINTF_N("bus %s (I2C%u): not initialised", s->label, s->bus);
+            continue;
+        }
+        if (s->running) {
+            CLI_PRINTF_N("bus %s (I2C%u): stop it first (lux stop %u)",
+                         s->label, s->bus, (u32)(i + 1u));
+            continue;
+        }
+        CLI_PRINTF_N("bus %s (I2C%u): scanning...", s->label, s->bus);
+        u32 found = 0;
+        for (u8 a = 0x08u; a < 0x78u; a++) {
+            u8 reg = VD6283_DEVICE_ID, val = 0;
+            if (ca_i2c_write_read(s->bus, a, &reg, 1u, &val, 1u)) {
+                found++;
+                CLI_PRINTF_N("  0x%02X answers (reg0x00=0x%02X)%s", a, val,
+                             a == VD6283_ADDR ? "  <- expected" : "");
+            }
+        }
+        if (found == 0)
+            CLI_PRINTF_N("  nothing answered: check 3V3, GND, the two wires"
+                         " and the pull-ups");
+    }
+    return true;
+}
+
+static bool map_cmd(c_str *args)
+{
+    (void)args;
+    print_wiring_map();
+    return true;
+}
+
+static bool raw_cmd(c_str *args)
+{
+    (void)args;
+    for (u8 i = 0; i < SENSOR_COUNT; i++) {
+        /* ⚠️ Zero-initialised, not just partly filled. vd_read_channels()
+         * writes the counts and the settings, and the assignments below
+         * cover the bookkeeping - but the row also reads dark_mode,
+         * vis_calc, cal_k, settling and now meas, and those were left as
+         * whatever the CLI stack happened to hold. A garbage dark_mode puts
+         * the measured value under the wrong column name; a garbage `meas`
+         * would send the row to the mixed-acquisition table outright.
+         * The explicit assignments stay: they say what the values MEAN
+         * here, which zero alone does not. */
+        lux_sample_t one = { 0 };
+        if (!s_sensor[i].present) {
+            CLI_PRINTF_N("sensor %s: not present", s_sensor[i].label);
+            continue;
+        }
+        if (vd_read_channels(&s_sensor[i], &one)) {
+            one.seq      = 0;
+            one.sensor   = i;
+            one.bus      = s_sensor[i].bus;
+            one.dropped     = s_sensor[i].dropped;
+            one.adjusted    = 0;
+            one.calibrating = 0;
+            /* "raw" is a single immediate read, outside any run: it has no
+             * held dark and no cadence, so it always prints the full table
+             * even while the mixed acquisition is armed. */
+            one.meas        = 0;
+            one.dark_mode   = s_sensor[i].dark_mode ? 1u : 0u;
+            print_sample(&one);
+        } else {
+            CLI_PRINTF_N("sensor %s: read failed", s_sensor[i].label);
+        }
+    }
+    return true;
+}
 
 #ifdef WIRE_A_PORT
-    if (ca_strncmp(p, "wire", 4) == 0) {
-        CLI_PRINTF_N("Continuity test - the sensors must be disconnected:");
-        wire_test(WIRE_A_PORT, WIRE_A_SCL_PIN, WIRE_A_SCL);
-        wire_test(WIRE_A_PORT, WIRE_A_SDA_PIN, WIRE_A_SDA);
-        wire_test(WIRE_B_PORT, WIRE_B_SCL_PIN, WIRE_B_SCL);
-        wire_test(WIRE_B_PORT, WIRE_B_SDA_PIN, WIRE_B_SDA);
-        CLI_PRINTF_N("  reboot to hand the pins back to the I2C peripheral");
-        return true;
-    }
+static bool wire_cmd(c_str *args)
+{
+    (void)args;
+    CLI_PRINTF_N("Continuity test - the sensors must be disconnected:");
+    wire_test(WIRE_A_PORT, WIRE_A_SCL_PIN, WIRE_A_SCL);
+    wire_test(WIRE_A_PORT, WIRE_A_SDA_PIN, WIRE_A_SDA);
+    wire_test(WIRE_B_PORT, WIRE_B_SCL_PIN, WIRE_B_SCL);
+    wire_test(WIRE_B_PORT, WIRE_B_SDA_PIN, WIRE_B_SDA);
+    CLI_PRINTF_N("  reboot to hand the pins back to the I2C peripheral");
+    return true;
+}
 #endif
 
-    if (ca_strncmp(p, "help", 4) == 0) {
-        print_commands();
-        return false;   /* let the built-in help print its own commands too */
-    }
+static const ca_cli_cmd_t s_app50_cmds[] = {
+    { "show", "show      : sensor status, configuration and counters", { show_cmd, STACK_MEDIUM } },
+    { "lux", "lux       : start [1|2] | stop [1|2] | dark <on|off> | probe <1|2> [ch] | bytes <1|2> | head | cal | meas <div> [discard] | meas_cl <div> [discard] | kdark <1|2> <val>|cal | lx | period <ms> | clamp <on|off> | otp <1|2> | setup (menu, both sensors)", { lux_cmd, STACK_MEDIUM } },
+    { "reg", "reg       : <addr> [val] raw register access, hex (sensor B)", { reg_cmd, STACK_MEDIUM } },
+    { "scan", "scan      : probe every I2C address on both buses", { scan_cmd, STACK_MEDIUM } },
+    { "map", "map       : sensor-to-connector wiring map", { map_cmd, STACK_MEDIUM } },
+    { "raw", "raw       : one immediate read from both sensors", { raw_cmd, STACK_MEDIUM } },
+#ifdef WIRE_A_PORT
+    { "wire", "wire      : I2C pin continuity test (sensors idle)", { wire_cmd, STACK_MEDIUM } },
+#endif
+};
 
-    return false;
-}
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
+static ca_cli_table_t s_app50_table = {
+    "app50", s_app50_cmds, (u16)(sizeof(s_app50_cmds) / sizeof(s_app50_cmds[0])), NULL
+};
 
 /* ============================================================================
  * ENTRY POINTS
@@ -3374,7 +3397,7 @@ void ca_os_main(void)
     ca_os_job("lux_pr", CA_TH_LEVEL4, task_print, NULL, STACK_SMALL, CA_JOB_STD,
               CA_FAULT_RESTART_THREAD);
 
-    EVAL_CLI( ca_cli_register(&s_user_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_app50_table); )
 
     ca_os_run(true);
 }

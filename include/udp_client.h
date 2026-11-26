@@ -61,7 +61,7 @@ typedef void (*ca_udp_cli_rx_t)(u8 handle,
 /* ----------------------------------------------------------------------- */
 
 typedef struct {
-    ca_ipv4_t          server_ip;
+    ca_ipv4_t          server_ip;          /* 0 = none: bound only, send with sendto */
     u16             server_port;
     u16             local_port;         /* 0 = ephemeral (49152 + slot) */
     u32             arp_timeout_ms;
@@ -97,9 +97,32 @@ bool ca_udp_client_recv(u8 handle,
                          u32 timeout_ms);
 
 /**
+ * Send payload to any destination, whatever the server of the handle (a
+ * handle opened with server_ip 0 has none: only this sends). Blocks up to
+ * arp_timeout_ms to resolve the next hop. False on an invalid handle, no
+ * next hop, or no TX buffer.
+ */
+bool ca_udp_client_sendto(u8 handle, ca_ipv4_t dst_ip, u16 dst_port,
+                          const u8 *payload, u16 len, u32 arp_timeout_ms);
+
+/**
+ * As ca_udp_client_recv(), and gives the sender (src_ip, src_port: either
+ * may be NULL). The handle receives every datagram to its local port.
+ */
+bool ca_udp_client_recvfrom(u8 handle, u8 *buf, u16 buf_len, u16 *out_len,
+                            ca_ipv4_t *src_ip, u16 *src_port, u32 timeout_ms);
+
+/**
  * Close connection: unbind port, drain ring.
  */
 void ca_udp_client_disconnect(u8 handle);
+
+/**
+ * Closes the handles of tasks that ended or restarted (buffers back to the
+ * pool). A handle belongs to the task that connected; any task may use or
+ * disconnect it while that task lives. Called once a second by the net stack.
+ */
+void ca_udp_client_reap(void);
 
 /**
  * Refresh server MAC (e.g. if ARP entry expired).

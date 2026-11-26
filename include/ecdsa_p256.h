@@ -31,9 +31,11 @@
  *
  * Typical usage:
  *   u8 priv[32], pub[64], sig[64];
- *   ca_ecdsa_p256_keygen(pub, priv);
- *   ca_ecdsa_p256_sign(sig, msg, len, priv);
- *   bool ok = ca_ecdsa_p256_verify(sig, msg, len, pub);
+ *   ca_ecdsa_p256_ctx_t *c = ca_memory_allocate(sizeof(*c));
+ *   ca_ecdsa_p256_keygen(c, pub, priv);
+ *   ca_ecdsa_p256_sign(c, sig, msg, len, priv);
+ *   bool ok = ca_ecdsa_p256_verify(c, sig, msg, len, pub);
+ *   ca_memory_free(c, NULL, true);
  ******************************************************************************
  */
 
@@ -41,6 +43,7 @@
 #define CRYPTO_ECDSA_P256_H
 
 #include "common.h"
+#include "kdf.h"
 
 /* ============================================================================
  * CONSTANTS
@@ -50,6 +53,63 @@
 #define ECDSA_P256_PUBLIC_SIZE     64
 #define ECDSA_P256_SIGNATURE_SIZE  64
 #define ECDSA_P256_HASH_SIZE       32   /* SHA-256 digest */
+#define ECDSA_P256_LIMBS           8U   /* 32-bit limbs per number */
+
+/* ============================================================================
+ * WORKING CONTEXT - given by the caller to every function below
+ *
+ * Heap, static or the caller's own state: never needed on the task stack.
+ * Every function wipes it before returning. On H7/F7 a context on the stack
+ * (DTCM) is the fast choice, in heap (AXI SRAM) the light one for the stack;
+ * size the task stack for it if you choose the stack.
+ * The member types are the internals of the implementation: do not use them.
+ * ========================================================================== */
+
+typedef struct {
+    u32 x[ECDSA_P256_LIMBS], y[ECDSA_P256_LIMBS], z[ECDSA_P256_LIMBS];
+} ca_p256_pt_t;
+
+typedef struct {
+    ca_hmac_sha256_ctx_t hmac;          /* RFC 6979 HMAC_DRBG */
+    u8   K[32];
+    u8   V[32];
+    bool started;
+} ca_p256_rfc6979_t;
+
+typedef struct {
+    u32 d[ECDSA_P256_LIMBS], z[ECDSA_P256_LIMBS], k[ECDSA_P256_LIMBS];
+    u32 r[ECDSA_P256_LIMBS], s[ECDSA_P256_LIMBS], km[ECDSA_P256_LIMBS];
+    u32 t[ECDSA_P256_LIMBS], u[ECDSA_P256_LIMBS];
+    u8  hb[32];
+    ca_p256_rfc6979_t st;
+    ca_p256_pt_t      R;
+} ca_p256_sign_work_t;
+
+typedef struct {
+    u32 r[ECDSA_P256_LIMBS], s[ECDSA_P256_LIMBS], z[ECDSA_P256_LIMBS];
+    u32 w[ECDSA_P256_LIMBS], u1[ECDSA_P256_LIMBS], u2[ECDSA_P256_LIMBS];
+    u32 x[ECDSA_P256_LIMBS], lhs[ECDSA_P256_LIMBS], rhs[ECDSA_P256_LIMBS];
+    u32 t[ECDSA_P256_LIMBS];
+    ca_p256_pt_t Q, R;
+} ca_p256_verify_work_t;
+
+typedef struct {
+    u32 d[ECDSA_P256_LIMBS], x[ECDSA_P256_LIMBS], y[ECDSA_P256_LIMBS];
+    ca_p256_pt_t Q;
+} ca_p256_pub_work_t;
+
+/* One operation at a time: the four share the memory */
+typedef union {
+    ca_sha256_ctx_t       hash;         /* message digest of sign / verify */
+    ca_p256_sign_work_t   sign;
+    ca_p256_verify_work_t verify;
+    ca_p256_pub_work_t    pub;
+} ca_p256_work_t;
+
+typedef struct {
+    ca_p256_work_t w;
+    u8             h[ECDSA_P256_HASH_SIZE];     /* digest kept across the union */
+} ca_ecdsa_p256_ctx_t;
 
 /* ============================================================================
  * PUBLIC API
@@ -61,7 +121,8 @@
  * @param private_key Private key, 32 bytes
  * @return false if d is 0 or >= n (not a valid private key)
  */
-bool ca_ecdsa_p256_public_from_private(u8 *public_key, const u8 *private_key);
+bool ca_ecdsa_p256_public_from_private(ca_ecdsa_p256_ctx_t *ctx, u8 *public_key,
+                                       const u8 *private_key);
 
 /**
  * @brief Generates a key pair with the RNG.
@@ -69,7 +130,7 @@ bool ca_ecdsa_p256_public_from_private(u8 *public_key, const u8 *private_key);
  * @param private_key Output, 32 bytes - to be kept secure (keys_store)
  * @return false if the RNG gave no entropy
  */
-bool ca_ecdsa_p256_keygen(u8 *public_key, u8 *private_key);
+bool ca_ecdsa_p256_keygen(ca_ecdsa_p256_ctx_t *ctx, u8 *public_key, u8 *private_key);
 
 /**
  * @brief Signs a SHA-256 digest (RFC 6979 deterministic nonce).
@@ -78,14 +139,14 @@ bool ca_ecdsa_p256_keygen(u8 *public_key, u8 *private_key);
  * @param private_key Private key, 32 bytes
  * @return false if the private key is not valid
  */
-bool ca_ecdsa_p256_sign_hash(u8 *signature, const u8 *hash,
-                             const u8 *private_key);
+bool ca_ecdsa_p256_sign_hash(ca_ecdsa_p256_ctx_t *ctx, u8 *signature,
+                             const u8 *hash, const u8 *private_key);
 
 /**
  * @brief Hashes the message with SHA-256 and signs the digest.
  */
-bool ca_ecdsa_p256_sign(u8 *signature, const u8 *message, u32 message_len,
-                        const u8 *private_key);
+bool ca_ecdsa_p256_sign(ca_ecdsa_p256_ctx_t *ctx, u8 *signature,
+                        const u8 *message, u32 message_len, const u8 *private_key);
 
 /**
  * @brief Verifies a signature over a SHA-256 digest.
@@ -94,14 +155,14 @@ bool ca_ecdsa_p256_sign(u8 *signature, const u8 *message, u32 message_len,
  *
  * @return true if the signature is valid
  */
-bool ca_ecdsa_p256_verify_hash(const u8 *signature, const u8 *hash,
-                               const u8 *public_key);
+bool ca_ecdsa_p256_verify_hash(ca_ecdsa_p256_ctx_t *ctx, const u8 *signature,
+                               const u8 *hash, const u8 *public_key);
 
 /**
  * @brief Hashes the message with SHA-256 and verifies the signature.
  */
-bool ca_ecdsa_p256_verify(const u8 *signature, const u8 *message,
-                          u32 message_len, const u8 *public_key);
+bool ca_ecdsa_p256_verify(ca_ecdsa_p256_ctx_t *ctx, const u8 *signature,
+                          const u8 *message, u32 message_len, const u8 *public_key);
 
 #if EN_ECDSA_P256_TEST
 /**

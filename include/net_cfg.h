@@ -41,14 +41,41 @@ typedef union {
     u8  v[4];   /* octet access: ip.v[0] .. ip.v[3]                     */
 } ca_ipv4_t;
 
+/** MAC address as two words: .l = bytes 0..3, .h = bytes 4..5 */
+typedef struct {
+    u32 l;  // First 4 bytes of the MAC (0, 1, 2, 3)
+    u16 h;  // Last 2 bytes of the MAC (4, 5)
+} __attribute__((packed)) ca_mac_raw_t;
+
 /** MAC address: fast comparison via .lh (1 extended instruction) or via .raw (2 instructions) */
 typedef union {
-    struct {
-        u32 l;  // First 4 bytes of the MAC (0, 1, 2, 3)
-        u16 h; // Last 2 bytes of the MAC (4, 5)        
-    } __attribute__((packed)) raw;
+    ca_mac_raw_t raw;
     u8  v[6];     // For access to individual bytes
 } ca_mac_t;
+
+/* ---------------------------------------------------------------------------
+ * MAC of the examples: 02:<role>:<MCU_ID>:<example>, MCU_ID (the end of the
+ * MCU's name, from the build: 753, 563, 446...) and the example number
+ * written in decimal digits, two per byte. ex149 on H753 = 02:CA:07:53:01:49,
+ * on H563 = 02:CA:05:63:01:49: two boards running the same example on the
+ * bench switch have two MACs and take two leases. All three digits of MCU_ID:
+ * F446 and F746 share the last two.
+ * role: CA = the board's interface, CB = its second interface (the NCM side
+ * of a relay), CC = the PC side of a USB-NCM link (must differ from the
+ * board's). 02 = locally administered, unicast.
+ * ------------------------------------------------------------------------- */
+#define CA_MAC_DEC2(n)        ((u8)(((((n) / 10U) % 10U) << 4) | ((n) % 10U)))
+#define CA_MAC_ROLE_DEV       0xCAU
+#define CA_MAC_ROLE_DEV2      0xCBU
+#define CA_MAC_ROLE_HOST      0xCCU
+#define CA_MAC_BYTES(role, n) { 0x02U, (role),                                   \
+                                CA_MAC_DEC2((MCU_ID) / 100U), CA_MAC_DEC2((MCU_ID) % 100U), \
+                                CA_MAC_DEC2((n) / 100U), CA_MAC_DEC2((n) % 100U) }
+/* ca_mac_t initialisers */
+#define CA_EXAMPLE_MAC(n)       { .v = CA_MAC_BYTES(CA_MAC_ROLE_DEV, n) }
+#define CA_EXAMPLE_MAC2(n)      { .v = CA_MAC_BYTES(CA_MAC_ROLE_DEV2, n) }
+/* u8[6] initialiser: the PC side of an NCM link (ca_usb_ncm_cfg_t.mac) */
+#define CA_EXAMPLE_MAC_HOST(n)  CA_MAC_BYTES(CA_MAC_ROLE_HOST, n)
 
 /* ----------------------------------------------------------------------- */
 /* UDP                                                                      */
@@ -70,6 +97,7 @@ typedef void (*ca_udp_rx_t)(u16 buf_idx);
 typedef struct {
     u16         port;           /* UDP port number (0 = unused slot) */
     ca_udp_rx_t handler;        /* callback, NULL = port open but no handler */
+    ca_task_owner_t owner;      /* task that bound it: dropped once it ends */
 } ca_udp_binding_t;
 
 typedef struct {

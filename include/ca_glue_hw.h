@@ -124,6 +124,11 @@ extern void ca_exti_hw_nvic_enable(u8 pin);                                /* en
 extern void ca_exti_hw_nvic_disable(u8 pin);                               /* disables the EXTI interrupt in the NVIC */
 extern void ca_exti_hw_imr_enable(u8 pin);                                 /* enables the interrupt mask (IMR) for the EXTI line */
 extern void ca_exti_hw_imr_disable(u8 pin);                                /* disables the interrupt mask (IMR) for the EXTI line */
+#if EN_TAMP
+extern bool ca_exti_hw_tamper_enable(void);                               /* tamper 1 on PC13, rising edge, hardware erase + IRQ; false if not possible */
+extern void ca_exti_hw_tamper_disable(void);                              /* tamper 1 off, IRQ off */
+extern void ca_exti_tamper_dispatch(void);                                /* generic: called by the tamper ISR in exti_<family>.c */
+#endif
 #endif
 
 /* ── FLASH ────────────────────────────────────────────────────────────────── */
@@ -418,6 +423,16 @@ extern void ca_jpeg_hw_header(u16 *w, u16 *h, u32 *nf, u32 *hsf, u32 *vsf); /* p
 #endif
 
 /* Filter math accelerator (fmac.h): EN_FMAC, paid only; H5/U5 only, stubs elsewhere */
+#if EN_FMAC
+extern bool ca_fmac_hw_init(void);                                         /* clock on, unit reset; false when the part has no FMAC */
+extern void ca_fmac_hw_setup(u32 x1_base, u32 x1_size, u32 x2_base, u32 x2_size,
+                             u32 y_base, u32 y_size, bool clip);           /* reset, buffer layout, watermarks 1, CLIPEN */
+extern void ca_fmac_hw_param(u32 func, u32 p, u32 q, u32 r);               /* FMAC_PARAM with START: load or filter function */
+extern void ca_fmac_hw_write(const i16 *data, u32 n);                      /* n words into WDATA, zeros when data is NULL */
+extern u32  ca_fmac_hw_run(const i16 *in, i16 *out, u32 len);              /* polled stream, outputs read; < len on a stall */
+extern void ca_fmac_hw_stop(void);                                         /* START off */
+extern u32  ca_fmac_hw_flags(void);                                        /* SAT/OVFL/UNFL as CA_FMAC_* */
+#endif
 
 /* Operational amplifiers (opamp.h): always built, no EN_ flag; U5/H7 only, stubs elsewhere */
 extern u32  ca_opamp_hw_count(void);                                       /* instances on this part, 0 = none */

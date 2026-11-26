@@ -154,18 +154,21 @@ static void ex98_test(void)
 }
 
 #if ENABLE_CLI
-static bool ex98_cli(c_str *pcmd)
+/* cordic — the line arrives without the command word */
+static bool cordic_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) { CLI_PUT_N("cordic: test | dump"); return false; }
-    if (ca_strncmp(p, "cordic", 6) != 0) return false;
-    p = ca_skip_sp(p + 6);
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "test", 4) == 0) { ex98_test(); return true; }
     if (ca_strncmp(p, "dump", 4) == 0) { ex98_dump(); return true; }
-    CLI_PUT_N("cordic: test | dump");
-    return true;
+    return false;                   /* cli prints the help line */
 }
-static ca_cli_node_t s_cli = { ex98_cli, NULL };
+static const ca_cli_cmd_t s_cordic_cmds[] = {
+    { "cordic", "cordic    : test | dump", { cordic_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_cordic_table = {
+    "cordic", s_cordic_cmds, (u16)(sizeof(s_cordic_cmds) / sizeof(s_cordic_cmds[0])), NULL
+};
 #endif
 
 PRIVATE_STRING(why, "ex98: this part has no CORDIC coprocessor (H563 and U575 have it)");
@@ -189,7 +192,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_cli);
+        ca_cli_register_table(&s_cordic_table);
     )
 }
 

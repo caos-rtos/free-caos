@@ -58,7 +58,7 @@
 /* ============================================================================
  * Network — Fixed MAC, IP assigned by DHCP
  * ============================================================================ */
-static const ca_mac_t s_mac = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x38U } };
+static const ca_mac_t s_mac = CA_EXAMPLE_MAC(38);
 
 static volatile ca_ipv4_t s_ip        = { .addr = 0U };
 static volatile ca_ipv4_t s_mask      = { .addr = 0U };
@@ -70,7 +70,7 @@ static void on_link_change(bool up);
 static ca_eth_cfg_t eth_cfg = {
     .phy_addr = 0U,
     .rmii     = true,
-    .mac      = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x38U } },
+    .mac      = CA_EXAMPLE_MAC(38),
     .link_cb  = on_link_change,
 };
 
@@ -160,7 +160,7 @@ static ca_udp_server_cfg_t srv_cfg = {
     .port              = UDP_SRV_PORT,
     .max_clients       = MAX_CLIENTS,
     .client_timeout_ms = CLIENT_TIMEOUT_MS,
-    .local_mac         = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x38U } },
+    .local_mac         = CA_EXAMPLE_MAC(38),
     .local_ip          = { .addr = 0U },
     .on_rx             = on_rx,
     .on_connect        = on_connect,
@@ -176,7 +176,7 @@ static ca_udp_server_cfg_t srv_cfg = {
  * ============================================================================ */
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .addr = 0U },
-    .mac  = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x38U } },
+    .mac  = CA_EXAMPLE_MAC(38),
     .udp  = { .bindings = { {0U, NULL} }, .count = 0U },
     .icmp = { .echo_reply = true },
 };

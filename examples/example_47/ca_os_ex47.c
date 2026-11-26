@@ -420,28 +420,36 @@ static bool ex47_arg2(const char *a, char *w1, u32 c1, u32 *n) {
     return ex47_u32(a, n);
 }
 
-static bool ex47_cli_handler(c_str *pcmd) {
-    const char *p = ca_skip_sp((*pcmd)->data);
-
-    /* multi-step input: intercepts input when the state machine is active */
+/* Prompt steps (password, n_evolutions, key index): each line typed after a
+ * prompt comes here whole, through ca_cli_capture_next(), and a step that asks
+ * for more arms the next capture itself. */
+static bool ex47_prompt(c_str *line)
+{
+    const char *p = (*line)->data;
     switch (s_cli_state) {
     case CLI_MAKEKEY_PWD1:
         ca_strncpy(s_pwd1, p, sizeof(s_pwd1) - 1);
         CLI_PUT_N("makekey: password2:");
         s_cli_state = CLI_MAKEKEY_PWD2;
+        ca_cli_capture_next(ex47_prompt);
         return true;
 
     case CLI_MAKEKEY_PWD2:
         ca_strncpy(s_pwd2, p, sizeof(s_pwd2) - 1);
         CLI_PUT_N("makekey: n_evolutions (1..16):");
         s_cli_state = CLI_MAKEKEY_NEVOLVE;
+        ca_cli_capture_next(ex47_prompt);
         return true;
 
     case CLI_MAKEKEY_NEVOLVE: {
         u32 n = 0;
         for (const char *c = p; *c >= '0' && *c <= '9'; c++)
             n = n * 10 + (*c - '0');
-        if (n < 1 || n > 16) { CLI_PUT_N("makekey: value must be 1..16"); return true; }
+        if (n < 1 || n > 16) {
+            CLI_PUT_N("makekey: value must be 1..16");
+            ca_cli_capture_next(ex47_prompt);   /* ask again */
+            return true;
+        }
         s_n_evolve  = n;
         s_cli_state = CLI_IDLE;
         crypto_post(JOB_MAKEKEY, 0);   /* runs in task_crypto, not here */
@@ -452,6 +460,7 @@ static bool ex47_cli_handler(c_str *pcmd) {
         ca_strncpy(s_pwd2, p, sizeof(s_pwd2) - 1);
         CLI_PUT_N("start: key index (0..15):");
         s_cli_state = CLI_START_KIDX;
+        ca_cli_capture_next(ex47_prompt);
         return true;
 
     case CLI_START_KIDX: {
@@ -466,79 +475,87 @@ static bool ex47_cli_handler(c_str *pcmd) {
     default:
         break;
     }
-
-    /* top-level commands */
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("makekey   : [<pwd1> <pwd2> <N>] generate the key block in flash");
-        CLI_PUT_N("start     : [<pwd2> <N>] decrypt and start ping-pong");
-        return false;
-    }
-
-    if (ca_strncmp(p, "makekey", 7) == 0) {
-        if (s_cli_state != CLI_IDLE) {
-            CLI_PUT_N("ex47: command in progress, please wait"); return true;
-        }
-        /* One-line form first: "makekey <pwd1> <pwd2> <N>", which is what the
-         * header of this file has always documented. Without arguments the
-         * prompt sequence below still works, for typing it by hand. */
-        const char *a = ca_skip_sp(p + 7);
-        if (*a != '\0') {
-            char w1[32], w2[32];
-            u32  n = 1;
-            if (!ex47_arg3(a, w1, sizeof(w1), w2, sizeof(w2), &n)) {
-                CLI_PUT_N("makekey: usage: makekey <pwd1> <pwd2> <N>");
-                return true;
-            }
-            if (n < 1U || n > 16U) {
-                CLI_PUT_N("makekey: n_evolutions must be 1..16");
-                return true;
-            }
-            ca_strncpy(s_pwd1, w1, sizeof(s_pwd1) - 1);
-            ca_strncpy(s_pwd2, w2, sizeof(s_pwd2) - 1);
-            s_n_evolve  = n;
-            s_cli_state = CLI_IDLE;
-            crypto_post(JOB_MAKEKEY, 0);   /* runs in task_crypto, not here */
-            return true;
-        }
-        CLI_PUT_N("makekey: password1:");
-        s_cli_state = CLI_MAKEKEY_PWD1;
-        return true;
-    }
-
-    if (ca_strncmp(p, "start", 5) == 0) {
-        if (s_cli_state != CLI_IDLE) {
-            CLI_PUT_N("ex47: command in progress, please wait"); return true;
-        }
-        if (s_running || s_done) {
-            CLI_PUT_N("start: ping-pong already running"); return true;
-        }
-        /* "start <pwd2> <N>", same reasoning as makekey above. */
-        const char *a = ca_skip_sp(p + 5);
-        if (*a != '\0') {
-            char w1[32];
-            u32  n = 0;
-            if (!ex47_arg2(a, w1, sizeof(w1), &n)) {
-                CLI_PUT_N("start: usage: start <pwd2> <N>");
-                return true;
-            }
-            if (n > 15U) {
-                CLI_PUT_N("start: key index must be 0..15");
-                return true;
-            }
-            ca_strncpy(s_pwd2, w1, sizeof(s_pwd2) - 1);
-            s_cli_state = CLI_IDLE;
-            crypto_post(JOB_START, n);     /* runs in task_crypto, not here */
-            return true;
-        }
-        CLI_PUT_N("start: password2:");
-        s_cli_state = CLI_START_PWD2;
-        return true;
-    }
-
-    return false;
+    return false;                       /* no prompt open: a normal command */
 }
 
-static ca_cli_node_t s_ex47_cli = { ex47_cli_handler, NULL };
+/* makekey [<pwd1> <pwd2> <N>] */
+static bool makekey_cmd(c_str *args)
+{
+    const char *p = (*args)->data;
+    if (s_cli_state != CLI_IDLE) {
+        CLI_PUT_N("ex47: command in progress, please wait"); return true;
+    }
+    /* One-line form first: "makekey <pwd1> <pwd2> <N>", which is what the
+     * header of this file has always documented. Without arguments the
+     * prompt sequence below still works, for typing it by hand. */
+    const char *a = p;
+    if (*a != '\0') {
+        char w1[32], w2[32];
+        u32  n = 1;
+        if (!ex47_arg3(a, w1, sizeof(w1), w2, sizeof(w2), &n)) {
+            CLI_PUT_N("makekey: usage: makekey <pwd1> <pwd2> <N>");
+            return true;
+        }
+        if (n < 1U || n > 16U) {
+            CLI_PUT_N("makekey: n_evolutions must be 1..16");
+            return true;
+        }
+        ca_strncpy(s_pwd1, w1, sizeof(s_pwd1) - 1);
+        ca_strncpy(s_pwd2, w2, sizeof(s_pwd2) - 1);
+        s_n_evolve  = n;
+        s_cli_state = CLI_IDLE;
+        crypto_post(JOB_MAKEKEY, 0);   /* runs in task_crypto, not here */
+        return true;
+    }
+    s_cli_state = CLI_MAKEKEY_PWD1;
+    ca_cli_capture_next(ex47_prompt);   /* armed before the prompt shows */
+    CLI_PUT_N("makekey: password1:");
+    return true;
+}
+
+/* start [<pwd2> <N>] */
+static bool start_cmd(c_str *args)
+{
+    const char *p = (*args)->data;
+    if (s_cli_state != CLI_IDLE) {
+        CLI_PUT_N("ex47: command in progress, please wait"); return true;
+    }
+    if (s_running || s_done) {
+        CLI_PUT_N("start: ping-pong already running"); return true;
+    }
+    /* "start <pwd2> <N>", same reasoning as makekey above. */
+    const char *a = p;
+    if (*a != '\0') {
+        char w1[32];
+        u32  n = 0;
+        if (!ex47_arg2(a, w1, sizeof(w1), &n)) {
+            CLI_PUT_N("start: usage: start <pwd2> <N>");
+            return true;
+        }
+        if (n > 15U) {
+            CLI_PUT_N("start: key index must be 0..15");
+            return true;
+        }
+        ca_strncpy(s_pwd2, w1, sizeof(s_pwd2) - 1);
+        s_cli_state = CLI_IDLE;
+        crypto_post(JOB_START, n);     /* runs in task_crypto, not here */
+        return true;
+    }
+    s_cli_state = CLI_START_PWD2;
+    ca_cli_capture_next(ex47_prompt);
+    CLI_PUT_N("start: password2:");
+    return true;
+}
+
+/* Inside cli: both only arm a prompt or hand the work to task_crypto */
+static const ca_cli_cmd_t s_ex47_cmds[] = {
+    { "makekey", "makekey   : [<pwd1> <pwd2> <N>] generate the key block in flash", { makekey_cmd, (ca_stack_size_t)0 } },
+    { "start",   "start     : [<pwd2> <N>] decrypt and start ping-pong",             { start_cmd,   (ca_stack_size_t)0 } },
+};
+
+static ca_cli_table_t s_ex47_table = {
+    "ex47", s_ex47_cmds, (u16)(sizeof(s_ex47_cmds) / sizeof(s_ex47_cmds[0])), NULL
+};
 
 /* ============================================================================
  * PING-PONG TASKS (same as ex46, wait for s_running)
@@ -656,7 +673,7 @@ void ca_os_configure(void) {
         ca_cli_init(1024);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_ex47_cli);
+        ca_cli_register_table(&s_ex47_table);
     )
 
     ca_led_init();

@@ -275,15 +275,10 @@ static u32 task_heartbeat(void *arg)
  * a DMA2 channel. Where every channel does M2M there is nothing to provoke.
  * ============================================================================ */
 #if ENABLE_CLI
-static bool ex31_cli_handler(c_str *pcmd)
+/* e31 — the line arrives without the command word */
+static bool e31_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("e31       : stuck  (M2M on a channel that cannot run it)");
-        return false;
-    }
-    if (ca_strncmp(p, "e31", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "stuck", 5) != 0) { CLI_PUT_N("e31: stuck"); return true; }
 
     if (ca_dma_hw_m2m_first_flat() == 0U) {
@@ -318,7 +313,13 @@ static bool ex31_cli_handler(c_str *pcmd)
     return true;
 }
 
-static ca_cli_node_t s_ex31_cli_node = { ex31_cli_handler, NULL };
+static const ca_cli_cmd_t s_e31_cmds[] = {
+    { "e31", "e31       : stuck  (M2M on a channel that cannot run it)", { e31_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_e31_table = {
+    "e31", s_e31_cmds, (u16)(sizeof(s_e31_cmds) / sizeof(s_e31_cmds[0])), NULL
+};
 #endif
 
 void ca_os_configure(void)
@@ -332,7 +333,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_ex31_cli_node);
+        ca_cli_register_table(&s_e31_table);
     )
     EVAL_USB_CDC_STD(ca_usb_dev_mng_cdc_cli();)
 

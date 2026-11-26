@@ -72,7 +72,7 @@
 /* ============================================================================
  * Network — Fixed MAC, IP assigned by DHCP
  * ============================================================================ */
-static const ca_mac_t s_mac = { .v = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x76U } };
+static const ca_mac_t s_mac = CA_EXAMPLE_MAC(76);
 
 static volatile ca_ipv4_t s_ip         = { .addr = 0U };
 static volatile bool   s_dhcp_bound = false;
@@ -84,7 +84,7 @@ static u8          s_lh = 0U;    /* listen handle */
 static ca_usb_ncm_cfg_t s_ncm = {
     .header = { CA_USB_TYPE_NCM, &ca_usb_ncm_ops },
     .mps    = 64U,
-    .mac    = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0xB6U },  /* Host-side MAC */
+    .mac    = CA_EXAMPLE_MAC_HOST(76),  /* Host-side MAC */
     /* .on_rx set by ca_ncm_iface_get() */
 };
 
@@ -153,7 +153,7 @@ static void on_dhcp_expire(void)
  * ============================================================================ */
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .addr = 0U },   /* 0.0.0.0 — updated after DHCP */
-    .mac  = { .v = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x76U } },
+    .mac  = CA_EXAMPLE_MAC(76),
     .udp  = { .bindings = { {0U, NULL} }, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -294,7 +294,20 @@ static u32 task_server(void *arg)
             buf[got] = 0U;
             ca_stdout_printf_n("  echo %u byte: %s", (u32)got, (cstr)buf);
 
-            ca_tcp_send(h, buf, got);
+            /* ca_tcp_send() is all or nothing: CA_TCP_RETRY means nothing
+             * went (TX slots full) - wait for room and send the same again.
+             * Ignoring it dropped the echo of that chunk (as ex137 does). */
+            bool gone = false;
+            u32  tries = 0U;
+            for (;;) {
+                const i32 r = ca_tcp_send(h, buf, got);
+                if (r == CA_TCP_SENT) break;
+                if (r == CA_TCP_GONE || ++tries > 1000U) { gone = true; break; }
+                if (!ca_tcp_wait_writable(h, 1000U) && !ca_tcp_is_connected(h)) {
+                    gone = true; break;
+                }
+            }
+            if (gone) break;
             session_bytes += got;
         }
 
@@ -340,14 +353,20 @@ static u32 task_ncm_mon(void *arg)
 
 /* ── Diagnostic CLI ──────────────────────────────────────────────────────── */
 #if ENABLE_CLI
-static bool dbg_cli_handler(c_str *pcmd)
+/* usbdbg — the line arrives without the command word */
+static bool usbdbg_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "usbdbg", 6) != 0) return false;
+    (void)args;
     EVAL_USB_DBG(ca_usb_dbg_print(USB_NUM);)
     return true;
 }
-static ca_cli_node_t s_dbg_cli = { dbg_cli_handler, NULL };
+static const ca_cli_cmd_t s_usbdbg_cmds[] = {
+    { "usbdbg", "usbdbg    : print the USB stack debug state", { usbdbg_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_usbdbg_table = {
+    "usbdbg", s_usbdbg_cmds, (u16)(sizeof(s_usbdbg_cmds) / sizeof(s_usbdbg_cmds[0])), NULL
+};
 #endif
 
 /* ============================================================================
@@ -364,7 +383,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_dbg_cli);
+        ca_cli_register_table(&s_usbdbg_table);
     )
 
     /* ca_net_init() is NOT called here (unlike ex41): the NCM iface only exists

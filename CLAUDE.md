@@ -13,7 +13,7 @@ headers, examples and manuals — **no kernel or driver sources**.
 | `<fam>/<mcu>/` | `libcaOS.a`, `libcaOS_<MCU>.a`, linker script, `objmap.h` (board map: LEDs, UARTs, stack sizes, tick) |
 | `examples/example_N/` | `ca_os_exN.c` — one feature per example, plus PC-side test scripts |
 | `workspace/app_N/` | The user's applications, one firmware each; `app_1` is the template. `app_2` (bootloader: TFTP/DFU update, A/B slots, rollback), `app_4` … are complete reference applications with their guides and PC scripts |
-| `doc/` | `caos_manual_en.pdf`, `caos_manual_it.pdf`; `caos_overview_en.pdf`: how caOS works, what it measures, where it is weak (the scheduler model, heap, network, crypto, limits) |
+| `doc/` | the manual in five volumes: `caos_vol1_features` (how caOS works), `caos_vol2_examples`, `caos_vol3_quickstart` (build, flash, porting) in English (`_en`) and Italian (`_it`); `caos_vol4_reference_en` (every function, type, define) and `caos_vol5_qa_en` (questions and answers), English only; `caos_overview_en.pdf`: how caOS works, what it measures, where it is weak (the scheduler model, heap, network, crypto, limits) |
 | `tools/lookup_sym.py` `tools/lookup_qa.py` `tools/db/` | API lookup: reference and Q&A, offline (see "Finding an API") |
 | `new_app.py` | Generates a new `workspace/app_N` skeleton (tasks, names, levels, stacks) |
 | `peek.py` | Reads/writes a variable of the running firmware by name, through the CLI (no debugger) |
@@ -74,10 +74,9 @@ suggests `--find`.
 **Do not invent function names by convention** — the real names often differ from the
 "obvious" one (`ca_os_sleep`, not `ca_task_delay`; `ca_memory_allocate`, not
 `ca_memory_alloc`). If `lookup_sym.py` does not know a name, it does not exist: say so
-instead of guessing. The reference also documents the full edition (CAN, USB HS, TAMP,
-FMAC): when `lookup_sym.py` says *not declared in include/*, this FREE edition does not
-have it. A few modules are declared in `include/` but **built out** of the FREE libraries
-(HTTPS/TLS 1.3, ECDSA P-256: see `LIMITS.md`): a call compiles and then fails to link.
+instead of guessing. The reference also documents CAN, USB HS and MicroPython, which the fixed FREE
+configuration leaves off: when `lookup_sym.py` says *not declared in include/*, this FREE edition does not
+have it (see `LIMITS.md`).
 The examples remain the best usage reference.
 
 ## Running without a board
@@ -172,40 +171,63 @@ void ca_os_main(void)
 
 ## Memory
 
-- `STACK_SMALL/MEDIUM/LARGE/KERNEL` are **ratios of `STACK_MIN`**, which depends on the board
-  (`objmap.h`): 512 B on F439/F446, 1 KB on F767/H773, 2 KB on H563/H753/U575. The same `STACK_SMALL`
-  is 1 KB on an F446 and 4 KB on a U575: size on the smallest target. Stacks are always
-  allocated by the kernel, with MPU guard and canary; there is no user-supplied stack.
+- `STACK_SMALL/MEDIUM/LARGE/XLARGE/KERNEL` are **fixed sizes chosen per board** in
+  `objmap.h` (multiples of `STACK_SLICE`, 2 KB):
+
+  | board | SMALL | MEDIUM | LARGE | XLARGE | KERNEL |
+  |---|---|---|---|---|---|
+  | F439, F446 | 2 KB | 2 KB | 4 KB | 6 KB | 8 KB |
+  | F767, H773 | 2 KB | 4 KB | 6 KB | 8 KB | 10 KB |
+  | H563, H753, U575 | 4 KB | 6 KB | 8 KB | 10 KB | 12 KB |
+
+  Every class is at least as large as on the F4 boards, so a task sized on an F439/F446
+  fits everywhere. Stacks are always allocated by the kernel, with MPU guard and canary;
+  there is no user-supplied stack. Check the real use with `stack` or `taskall`.
 - `ca_memory_allocate()` blocks **belong to the calling task** and are freed when it ends.
   A block handed to another task (message, buffer, shared object) must come from
   `ca_memory_allocate_shared()` and be freed with `ca_memory_free()`.
-- **CLI commands run in a temporary task** that ends when the command returns: anything a
-  command allocates with `ca_memory_allocate()` is freed right after. Keep long-lived
-  resources in a permanent task, or allocate them shared.
+- **A CLI command with a stack in its table entry runs in a temporary task** (named after
+  the command) that ends when the command returns: anything it allocates with
+  `ca_memory_allocate()` is freed right after. Keep long-lived resources in a permanent
+  task, or allocate them shared. A command with stack `0` runs inside the `cli` task
+  itself: it must not allocate, block or take long (see "Console and CLI").
 - The FREE edition reserves half of the heap (`LIMITS.md`).
 
 ## Console and CLI
 
 - `ca_stdout_put_n()` / `ca_stdout_printf_n()` work **only from a task**. Before
   `ca_os_run()` (in `ca_os_configure()`) print with `PUT_N()` on a `PRIVATE_STRING`.
-- A user CLI command is a node in a chain:
+- User CLI commands are a **table**: `{ word, help line, { handler, stack } }`, registered
+  once with `ca_cli_register_table()`:
 
   ```c
-  static bool my_cli(c_str *pcmd)
+  /* the line arrives WITHOUT the command word */
+  static bool motor_cmd(c_str *args)
   {
-      const char *p = ca_skip_sp((*pcmd)->data);
-      if (ca_strncmp(p, "help", 4) == 0) { CLI_PUT_N("start | stop"); return false; }
+      const char *p = (*args)->data;
       if (ca_strncmp(p, "start", 5) == 0) { CLI_PUT_N("started"); return true; }
-      return false;                     /* not mine: pass it on */
+      if (ca_strncmp(p, "stop", 4) == 0)  { CLI_PUT_N("stopped"); return true; }
+      return false;                     /* bad arguments: cli prints the help line */
   }
-  static ca_cli_node_t s_my_node = { my_cli, NULL };
-  /* in ca_os_configure(), after ca_cli_init(): ca_cli_register(&s_my_node); */
+  static const ca_cli_cmd_t s_motor_cmds[] = {
+      { "motor", "motor     : start | stop", { motor_cmd, STACK_SMALL } },
+  };
+  static ca_cli_table_t s_motor_table = {
+      "motor", s_motor_cmds, (u16)(sizeof(s_motor_cmds) / sizeof(s_motor_cmds[0])), NULL
+  };
+  /* in ca_os_configure(), after ca_cli_init(): ca_cli_register_table(&s_motor_table); */
   ```
 
-  Return `true` when handled, `false` to pass it to the next node; on `help` print one line
-  and return `false` so the other nodes add theirs.
+  The word is matched **exactly**; `help` lists the help lines of every table. The handler
+  returns `true` when done, `false` to have the help line printed. The table is `const`
+  (flash), the `ca_cli_table_t` node lives in RAM and must be `static`.
+- **Stack `0` or a real stack.** With `0` the handler runs inside the `cli` task: only for
+  what ends in well under 50 ms and does not allocate, or the console stops answering.
+  Anything slower declares a stack (`STACK_SMALL`...) and runs in its own task, one
+  instance per command: typing it again while it runs prints `busy: ...`. The console
+  stays free meanwhile.
 - An `EN_CLI_x` flag only compiles a driver's commands; they appear when that driver's
-  `_init()` runs.
+  `_init()` runs (it registers the driver's table).
 
 ## Drivers: traps worth knowing
 
@@ -232,19 +254,20 @@ They describe how caOS and the Nucleo boards behave, so they stay true for user 
 **Tasks and memory**
 
 - *A task index printed at launch names another task a moment later.* A `thid` is a
-  position in the task list and moves when any task ends; every CLI command itself runs in
-  a temporary task. Keep the `ca_task_handle_t` from `ca_os_job()`; a stale handle fails
+  position in the task list and moves when any task ends; every CLI command with a stack
+  runs in a temporary task of its own. Keep the `ca_task_handle_t` from `ca_os_job()`; a stale handle fails
   cleanly instead of hitting another task.
 - *`Invalid Free` or a fault in the allocator, one command after the real cause.* Heap
-  allocated inside a CLI command handler is freed when the command returns. Open, use and
+  allocated inside a CLI command handler (one with a stack) is freed when the command
+  returns. Open, use and
   close in the same command, or let a permanent task own the resource (or allocate it
   with `ca_memory_allocate_shared()`).
 - *A task prints `Invalid call without Context` at start-up.* A task runs as soon as it is
   created, and `ca_stdout_*` needs a running task. In `ca_os_configure()` print with
   `PUT_N()` on a `PRIVATE_STRING`.
-- *A stack that was fine on one board overflows on another.* `STACK_SMALL` and friends are
-  multiples of the board's `STACK_MIN` (see "Memory"): size on the smallest target, then
-  check `taskall` on the board.
+- *A stack that was fine on one board overflows on another.* The `STACK_*` sizes are set
+  per board (see "Memory"): the F4 boards have the smallest. Size on an F439/F446, then
+  check `stack` / `taskall` on the board.
 - *A wait meant as a poll never returns, or the reverse.* Timeouts are milliseconds on
   every blocking call: `CA_NO_WAIT_TIME` (0) does not wait, `CA_WAIT_FOREVER` waits forever.
   Never write a literal `0` meaning "forever".
@@ -322,5 +345,5 @@ is the assert; it uses the same mechanism.
 
 ## Migrating from FreeRTOS, Zephyr or ThreadX
 
-Chapter "Migrating from FreeRTOS, Zephyr and ThreadX to caOS" in the manual: call-by-call
+Chapter "Migrating from FreeRTOS, Zephyr and ThreadX to caOS" in Vol. 1 of the manual (`doc/caos_vol1_features_en.pdf`): call-by-call
 tables and the semantic differences above, in detail.

@@ -845,7 +845,7 @@ static void fault_irq(void) {
 #endif
 
 /* ============================================================================
- * CLI — chain of responsibility
+ * CLI — command table
  * ========================================================================== */
 
 /* CA_FAULT_ASSERT = remove the task on fault (do NOT restart): a deterministic
@@ -855,31 +855,24 @@ static void spawn(const char *name, ca_task_fn_t fn) {
     ca_os_job(name, CA_TH_LEVEL3, fn, NULL, STACK_SMALL, CA_JOB_STD, CA_FAULT_ASSERT);
 }
 
-static bool user_cli_handler(c_str *pcmd);
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
 
-static bool user_cli_handler(c_str *pcmd) {
-    c_str cmd = *pcmd;
-    const char *p = ca_skip_sp(cmd->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) {
-        /* Two lines: one did not fit ca_stdout_put_n's buffer (DEFAULT_MSG_SIZE)
-         * and came out cut at 'und~OVF' */
-        CLI_PUT_N("ex68 fault: null_r | null_w | ram | flash | ibuserr | ro | stack | stackjmp | stackup | xn | runaway");
-        CLI_PUT_N("ex68 fault: div0 | unalign | undef | invstate | forced" EX68_FP_HELP);
-        CLI_PUT_N("ex68 fault: imprecise | imprecise_rst (store beyond RAM, no barrier, PendSV due)");
-        CLI_PUT_N("ex68 fault: safeguard | sg_irq (kernel assertions, sg_irq resets the part)");
-        CLI_PUT_N("ex68 fault: heap (corrupted block header: refused, no fault; heap stays corrupted)");
-        CLI_PUT_N("ex68 fault: restart (div0 once in a RESTART task: renewed, runs again)");
-        CLI_PUT_N("ex68 fault: emerg | emerg_rst (emergency handler, then task removed | renewed)");
+/* One help string, wrapped by the cli at its " | ": irq only with EN_TIMER.
+ * imprecise_rst: store beyond RAM, no barrier, PendSV due; heap: corrupted
+ * block header, refused, no fault; restart: div0 once in a RESTART task;
+ * emerg/emerg_rst: emergency handler, then task removed/renewed; irq: div0
+ * inside the TIM3 ISR, halts the part. */
 #if EN_TIMER
-        CLI_PUT_N("ex68 fault: irq (div0 inside the TIM3 ISR, halts the part)");
+#define EX68_IRQ_HELP " | irq"
+#else
+#define EX68_IRQ_HELP ""
 #endif
-        return false;   /* continue the help chain */
-    }
+#define EX68_HELP "fault     : null_r | null_w | ram | flash | ibuserr | ro | stack | stackjmp | stackup | xn | runaway" \
+                  " | div0 | unalign | undef | invstate | forced" EX68_FP_HELP \
+                  " | imprecise | imprecise_rst | safeguard | sg_irq | heap | restart | emerg | emerg_rst" EX68_IRQ_HELP
 
-    if (ca_strncmp(p, "fault", 5) != 0) return false;
-    p = ca_skip_sp(p + 5);
+/* fault <kind> — the line arrives without the command word */
+static bool fault_cmd(c_str *args) {
+    const char *p = (*args)->data;
 
     if (ca_strncmp(p, "stackjmp", 8)== 0) { spawn("f_stackjmp",task_stackjmp);return true; }
     if (ca_strncmp(p, "stackup", 7) == 0) { spawn("f_stackup", task_stackup); return true; }
@@ -936,9 +929,16 @@ static bool user_cli_handler(c_str *pcmd) {
     if (ca_strncmp(p, "irq", 3)     == 0) { fault_irq();                      return true; }
 #endif
 
-    CLI_PUT_N("ex68: unknown fault (type 'help')");
-    return false;
+    return false;                   /* unknown kind: cli prints the help line */
 }
+
+static const ca_cli_cmd_t s_ex68_cmds[] = {
+    { "fault", EX68_HELP, { fault_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_ex68_table = {
+    "ex68", s_ex68_cmds, (u16)(sizeof(s_ex68_cmds) / sizeof(s_ex68_cmds[0])), NULL
+};
 
 /* ============================================================================
  * MONITOR + ENTRY POINTS
@@ -1061,6 +1061,6 @@ void ca_os_main(void) {
     ca_timer_init();
 #endif
     ca_os_job("monitor", CA_TH_LEVEL3, task_monitor, NULL, STACK_MEDIUM, CA_JOB_STD, CA_FAULT_RESTART_THREAD);
-    EVAL_CLI( ca_cli_register(&s_user_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_ex68_table); )
     ca_os_run(true);
 }

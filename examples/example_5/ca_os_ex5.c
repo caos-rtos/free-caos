@@ -235,14 +235,9 @@ static void tw_run(u32 sec) {
                  stuck ? " STUCK" : "", ok ? "PASS" : "FAIL");
 }
 
-static bool tw_cli_handler(c_str *pcmd) {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("twait     : [sec] timed wait check on the recursive mutex: latency + timeout");
-        return false;
-    }
-    if (ca_strncmp(p, "twait", 5) != 0) return false;
-    p = ca_skip_sp(p + 5);
+/* twait — the line arrives without the command word */
+static bool twait_cmd(c_str *args) {
+    const char *p = (*args)->data;
     u32 sec = 3U;
     if (*p >= '0' && *p <= '9') {
         const i32 s = ca_strtol(p, 10);
@@ -257,7 +252,13 @@ static bool tw_cli_handler(c_str *pcmd) {
     tw_busy = false;
     return true;
 }
-static ca_cli_node_t s_tw_cli_node = { tw_cli_handler, NULL };
+static const ca_cli_cmd_t s_twait_cmds[] = {
+    { "twait", "twait     : [sec] timed wait check on the recursive mutex: latency + timeout", { twait_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_twait_table = {
+    "twait", s_twait_cmds, (u16)(sizeof(s_twait_cmds) / sizeof(s_twait_cmds[0])), NULL
+};
 
 #endif /* ENABLE_CLI */
 
@@ -290,6 +291,6 @@ void ca_os_main(void) {
     ca_os_job("rec_2", CA_TH_LEVEL2, task_2_exec, (void *)(uintptr_t)3,
                        STACK_LARGE, CA_JOB_STD, CA_FAULT_ASSERT);
 
-    EVAL_CLI( ca_cli_register(&s_tw_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_twait_table); )
     ca_os_run(true);
 }

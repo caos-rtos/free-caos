@@ -70,7 +70,7 @@
 /* ============================================================================
  * Network
  * ============================================================================ */
-static const ca_mac_t s_mac = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x41U } };
+static const ca_mac_t s_mac = CA_EXAMPLE_MAC(41);
 
 static volatile ca_ipv4_t s_ip         = { .addr = 0U };
 static volatile bool   s_dhcp_bound = false;
@@ -83,7 +83,7 @@ static void on_link_change(bool up);
 static ca_eth_cfg_t eth_cfg = {
     .phy_addr = 0U,
     .rmii     = true,
-    .mac      = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x41U } },
+    .mac      = CA_EXAMPLE_MAC(41),
     .link_cb  = on_link_change,
 };
 
@@ -156,7 +156,7 @@ static void on_link_change(bool up)
  * ============================================================================ */
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .addr = 0U },
-    .mac  = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x41U } },
+    .mac  = CA_EXAMPLE_MAC(41),
     .udp  = { .bindings = { {0U, NULL} }, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -228,7 +228,20 @@ static u32 task_server(void *arg)
             buf[got] = 0U;
             ca_stdout_printf_n("  echo %u byte: %s", (u32)got, (cstr)buf);
 
-            ca_tcp_send(h, buf, got);
+            /* ca_tcp_send() is all or nothing: CA_TCP_RETRY means nothing
+             * went (TX slots full) - wait for room and send the same again.
+             * Ignoring it dropped the echo of that chunk (as ex137 does). */
+            bool gone = false;
+            u32  tries = 0U;
+            for (;;) {
+                const i32 r = ca_tcp_send(h, buf, got);
+                if (r == CA_TCP_SENT) break;
+                if (r == CA_TCP_GONE || ++tries > 1000U) { gone = true; break; }
+                if (!ca_tcp_wait_writable(h, 1000U) && !ca_tcp_is_connected(h)) {
+                    gone = true; break;
+                }
+            }
+            if (gone) break;
             session_bytes += got;
         }
 

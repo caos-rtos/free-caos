@@ -46,27 +46,41 @@ void ca_hmac_sha256_update(ca_hmac_sha256_ctx_t *ctx, const u8 *data, u32 len);
 /* Writes the 32-byte MAC and wipes the context. */
 void ca_hmac_sha256_final(ca_hmac_sha256_ctx_t *ctx, u8 mac[HMAC_SHA256_SIZE]);
 
-/* One-shot HMAC-SHA256. */
-void ca_hmac_sha256(const u8 *key, u32 key_len, const u8 *data, u32 len,
-                    u8 mac[HMAC_SHA256_SIZE]);
+/* One-shot HMAC-SHA256, context from the caller (wiped on return). */
+void ca_hmac_sha256(ca_hmac_sha256_ctx_t *ctx, const u8 *key, u32 key_len,
+                    const u8 *data, u32 len, u8 mac[HMAC_SHA256_SIZE]);
 
 /*
  * HKDF-SHA256 (RFC 5869): extract (salt, ikm) then expand (prk, info) into
  * out_len bytes. salt may be NULL (= 32 zero bytes). out_len 1..8160.
- * Returns false on bad arguments only.
+ * ctx: HMAC context from the caller, used for every step, wiped on return.
+ * Returns false on bad arguments only (ctx == NULL among them).
  */
-bool ca_hkdf_sha256(const u8 *salt, u32 salt_len,
+bool ca_hkdf_sha256(ca_hmac_sha256_ctx_t *ctx,
+                    const u8 *salt, u32 salt_len,
                     const u8 *ikm, u32 ikm_len,
                     const u8 *info, u32 info_len,
                     u8 *out, u32 out_len);
+
+/* PBKDF2 working state: two HMAC contexts keyed with the password and the
+ * running blocks. Given by the caller (heap, static or its own state) so it
+ * never weighs on the task stack; wiped by ca_pbkdf2_sha256() on return.
+ * In heap, free it with ca_memory_free(wk, NULL, true). */
+typedef struct {
+    ca_hmac_sha256_ctx_t keyed;     /* password-keyed pads, computed once */
+    ca_hmac_sha256_ctx_t ctx;       /* working copy for each round */
+    u8                   u[SHA256_DIGEST_SIZE];
+    u8                   acc[SHA256_DIGEST_SIZE];
+} ca_pbkdf2_sha256_ctx_t;
 
 /*
  * PBKDF2-HMAC-SHA256 (RFC 8018): password + salt, `iterations` rounds,
  * out_len bytes. Cost grows linearly with iterations: on the MCU it takes
  * seconds on purpose (each guess costs an attacker the same). Not from ISR.
- * Returns false on bad arguments (iterations == 0, out_len == 0).
+ * Returns false on bad arguments (wk == NULL, iterations == 0, out_len == 0).
  */
-bool ca_pbkdf2_sha256(const u8 *password, u32 password_len,
+bool ca_pbkdf2_sha256(ca_pbkdf2_sha256_ctx_t *wk,
+                      const u8 *password, u32 password_len,
                       const u8 *salt, u32 salt_len,
                       u32 iterations, u8 *out, u32 out_len);
 

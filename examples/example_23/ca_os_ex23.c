@@ -42,7 +42,7 @@ void ca_os_configure(void)
 
 void ca_os_main(void)
 {
-    ca_flash_init();   /* registers the driver CLI node */
+    ca_flash_init();   /* registers the driver CLI table */
     ca_os_run(true);
 }
 

@@ -130,19 +130,21 @@ static void overwrite_check(void) {
                  (u32)longq, ok ? "PASS" : "FAIL");
 }
 
-static bool ex4_cli_handler(c_str *pcmd) {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("overwrite : one-item queue mailbox write check (static + heap)");
-        return false;
-    }
-    if (ca_strncmp(p, "overwrite", 9) == 0) {
-        overwrite_check();
-        return true;
-    }
-    return false;
+/* one entry per command word; each gets the line without its word */
+static bool overwrite_cmd(c_str *args)
+{
+    (void)args;
+    overwrite_check();
+    return true;
 }
-static ca_cli_node_t s_ex4_cli_node = { ex4_cli_handler, NULL };
+
+static const ca_cli_cmd_t s_ex4_cmds[] = {
+    { "overwrite", "overwrite : one-item queue mailbox write check (static + heap)", { overwrite_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_ex4_table = {
+    "ex4", s_ex4_cmds, (u16)(sizeof(s_ex4_cmds) / sizeof(s_ex4_cmds[0])), NULL
+};
 #endif /* ENABLE_CLI */
 
 /* init hardware device enabled */
@@ -175,6 +177,6 @@ void ca_os_main(void) {
     ca_os_job("cons_2", CA_TH_LEVEL3, consumer_2, NULL,
                         STACK_MEDIUM, CA_JOB_STD, CA_FAULT_ASSERT);
 
-    EVAL_CLI( ca_cli_register(&s_ex4_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_ex4_table); )
     ca_os_run(true);
 }

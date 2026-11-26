@@ -233,27 +233,24 @@ static void heap_all(void)
 }
 
 #if ENABLE_CLI
-static void ex108_usage(void)
+/* heap — the line arrives without the command word */
+static bool heap_cmd(c_str *args)
 {
-    CLI_PUT_N("heap      : basic | owned | shared | check | all");
-}
-
-static bool ex108_cli(c_str *pcmd)
-{
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) { ex108_usage(); return false; }
-    if (ca_strncmp(p, "heap", 4) != 0) return false;
-    p = ca_skip_sp(p + 4);
-
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "basic", 5) == 0)  { (void)heap_basic();  return true; }
     if (ca_strncmp(p, "owned", 5) == 0)  { (void)heap_owned();  return true; }
     if (ca_strncmp(p, "shared", 6) == 0) { (void)heap_shared(); return true; }
     if (ca_strncmp(p, "check", 5) == 0)  { (void)heap_check();  return true; }
     if (ca_strncmp(p, "all", 3) == 0)    { heap_all();          return true; }
-    ex108_usage();
-    return true;
+    return false;                   /* cli prints the help line */
 }
-static ca_cli_node_t s_cli = { ex108_cli, NULL };
+static const ca_cli_cmd_t s_heap_cmds[] = {
+    { "heap", "heap      : basic | owned | shared | check | all", { heap_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_heap_table = {
+    "heap", s_heap_cmds, (u16)(sizeof(s_heap_cmds) / sizeof(s_heap_cmds[0])), NULL
+};
 #endif
 
 PRIVATE_STRING(banner, "ex108: heap ownership demo, idle - type 'heap all'");
@@ -269,7 +266,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_cli);
+        ca_cli_register_table(&s_heap_table);
     )
     PUT_N(&priv_banner);
 }

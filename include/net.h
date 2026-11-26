@@ -201,13 +201,32 @@ void ca_net_count_err(bool bus, bool rbu);
  * false (NCM only, no iface) → the builders calculate them. */
 bool ca_net_tx_csum_offload(void);
 
-/* L2 payload (MTU) every registered interface accepts: the smallest one,
- * since a datagram is cut before its egress iface is known. The medium
- * decides it: NCM will not send a frame over 1514 bytes, an ETH driver has
- * more room. Returns IP_TX_MTU_DEFAULT when no interface is registered or the
- * field is 0.
- * Used by ca_ip_fragment_send() to decide whether to fragment. */
-u16 ca_net_tx_mtu(void);
+/* L2 payload (MTU) of interface id: IP_TX_MTU_DEFAULT when the field is 0
+ * or the id is unknown. Decides, per egress iface, whether a datagram is
+ * fragmented (EN_IP_FRAG) and the MSS the TCP service announces. */
+u16 ca_net_iface_mtu(u8 id);
+
+/* Set the MTU of interface id (68..IP_TX_MTU_DEFAULT): a radio link, or one
+ * simulated on ETH/NCM ('ip mtu'). Datagrams already queued are cut at the
+ * new value; TCP connections opened before keep the MSS they negotiated.
+ * false if the id is unknown or the value out of range. */
+bool ca_net_iface_set_mtu(u8 id, u16 mtu);
+
+/* Static path MTU per next hop: frames whose L2 destination is mac (a radio
+ * modem/router on the LAN) are cut to mtu, and TCP connections through it
+ * use an MSS of mtu - 40, even mid connection. Two entries. mtu 68..
+ * IP_TX_MTU_DEFAULT adds or updates, 0 removes. false: bad MAC (zero or
+ * multicast), mtu out of range, table full, or nothing to remove. */
+bool ca_net_pmtu_set(const ca_mac_t *mac, u16 mtu);
+
+/* Entry idx (0..ca_net_pmtu_size()-1) of the table; false if the slot is free. */
+bool ca_net_pmtu_get(u8 idx, ca_mac_t *mac, u16 *mtu);
+u8   ca_net_pmtu_size(void);
+
+/* MTU for a frame leaving iface id towards the next hop dst_mac (6 bytes):
+ * the smaller of the iface MTU and the table entry for that MAC. NULL
+ * dst_mac: the iface MTU. */
+u16  ca_net_path_mtu(u8 id, const u8 *dst_mac);
 
 /* Soft link control: block/unblock all TX and RX without reinitialising ETH.
  * ca_net_link_down() drives PHY nRST low (if wired) and sets the link flag.

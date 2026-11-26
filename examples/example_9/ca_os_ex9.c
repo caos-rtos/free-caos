@@ -242,19 +242,17 @@ static void set_if_empty_check(void) {
                  (u32)first, (u32)second, kept, taken, (u32)again, last, ok ? "PASS" : "FAIL");
 }
 
-static bool tw_cli_handler(c_str *pcmd) {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("twait     : [sec] timed wait check on the task notification: latency + timeout");
-        CLI_PUT_N("setempty  : CA_NOTIFY_ACTION_SET_IF_EMPTY check: written when empty, refused when pending");
-        return false;
-    }
-    if (ca_strncmp(p, "setempty", 8) == 0) {
-        set_if_empty_check();
-        return true;
-    }
-    if (ca_strncmp(p, "twait", 5) != 0) return false;
-    p = ca_skip_sp(p + 5);
+static bool setempty_cmd(c_str *args)
+{
+    (void)args;
+    set_if_empty_check();
+    return true;
+}
+
+/* twait [sec] */
+static bool twait_cmd(c_str *args)
+{
+    const char *p = (*args)->data;
     u32 sec = 3U;
     if (*p >= '0' && *p <= '9') {
         const i32 s = ca_strtol(p, 10);
@@ -269,7 +267,15 @@ static bool tw_cli_handler(c_str *pcmd) {
     tw_busy = false;
     return true;
 }
-static ca_cli_node_t s_tw_cli_node = { tw_cli_handler, NULL };
+
+static const ca_cli_cmd_t s_tw_cmds[] = {
+    { "twait",    "twait     : [sec] timed wait check on the task notification: latency + timeout", { twait_cmd, STACK_MEDIUM } },
+    { "setempty", "setempty  : CA_NOTIFY_ACTION_SET_IF_EMPTY check: written when empty, refused when pending", { setempty_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_tw_table = {
+    "ex9", s_tw_cmds, (u16)(sizeof(s_tw_cmds) / sizeof(s_tw_cmds[0])), NULL
+};
 
 #endif /* ENABLE_CLI */
 
@@ -301,7 +307,7 @@ void ca_os_main(void) {
     ca_os_job("sender",   CA_TH_LEVEL3, task_sender, NULL,
                           STACK_MEDIUM, CA_JOB_STD, CA_FAULT_ASSERT);
     )
-    EVAL_CLI( ca_cli_register(&s_tw_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_tw_table); )
     ca_os_run(true);
 }
 #else /* EN_NOTIFY */

@@ -347,21 +347,26 @@ static void dts_alarm_test(void)
     CLI_PRINTF_N("DTS ALARM %s", ok ? "PASS" : "FAIL");
 }
 
-static bool ex11_cli(c_str *pcmd)
+/* dts — the line arrives without the command word */
+static bool dts_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) { CLI_PUT_N("dts: [alarm] - digital sensor vs ADC, alarm test"); return false; }
-    if (ca_strncmp(p, "dts", 3) != 0) return false;
+    const char *p = (*args)->data;
     if (!ca_temp_dts_present()) {
         CLI_PUT_N("DTS: not present on this part");
         return true;
     }
-    p = ca_skip_sp(p + 3);
+    p = ca_skip_sp(p);          /* the line comes without "dts" (command tables, 22/11) */
     if (ca_strncmp(p, "alarm", 5) == 0) dts_alarm_test();
     else                                (void)dts_compare();
     return true;
 }
-static ca_cli_node_t s_ex11_cli = { ex11_cli, NULL };
+static const ca_cli_cmd_t s_dts_cmds[] = {
+    { "dts", "dts       : [alarm] - digital sensor vs ADC, alarm test", { dts_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_dts_table = {
+    "dts", s_dts_cmds, (u16)(sizeof(s_dts_cmds) / sizeof(s_dts_cmds[0])), NULL
+};
 #endif
 
 /* =============================================================================
@@ -380,7 +385,7 @@ void ca_os_configure(){
         ca_cli_init(4096);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_ex11_cli);
+        ca_cli_register_table(&s_dts_table);
     )
     /* DBG */
     EVAL_USB_CDC_STD(ca_usb_dev_mng_cdc_cli();)

@@ -68,6 +68,62 @@ bool ca_fat_touch(const char *name);
 bool ca_fat_rm(const char *name);
 bool ca_fat_cat(const char *name);      /* heap round trip + hexdump */
 
+/* ---- Handle API: files and directories, NO printing ------------------------
+ * For programs (the MicroPython VFS, a logger, a file server): every call
+ * returns a FatFS result code, 0 = OK (ca_fat_strerror() names it), and
+ * prints nothing. Paths are FatFS paths, absolute ("/dir/f.txt") or relative
+ * to the volume's current directory.
+ *
+ * The FIL/DIR objects are allocated on the CALLER's task heap
+ * (ca_memory_allocate): never on a stack, which on H7 is in DTCM where the
+ * SDMMC IDMA cannot reach, and freed with the task if it dies. A handle not
+ * closed loses the data not yet written; the volume stays consistent.
+ * The service lock is taken per call. */
+
+typedef struct ca_fat_file_s ca_fat_file_t;     /* opaque */
+typedef struct ca_fat_dir_s  ca_fat_dir_t;      /* opaque */
+
+#define CA_FAT_NAME_MAX     256U                /* LFN 255 + NUL */
+#define CA_FAT_ATTR_RDO     0x01U
+#define CA_FAT_ATTR_DIR     0x10U
+
+/* ca_fat_fopen() mode: the FatFS FA_* values */
+#define CA_FAT_O_READ       0x01U
+#define CA_FAT_O_WRITE      0x02U
+#define CA_FAT_O_EXISTING   0x00U               /* open, fail if missing  */
+#define CA_FAT_O_NEW        0x04U               /* create, fail if exists */
+#define CA_FAT_O_TRUNC      0x08U               /* create or truncate     */
+#define CA_FAT_O_ALWAYS     0x10U               /* open or create         */
+#define CA_FAT_O_APPEND     0x30U               /* open or create, at end */
+
+typedef struct ca_fat_info_s {
+    u32  size;
+    u16  fdate;                                 /* FAT date / time        */
+    u16  ftime;
+    u8   attr;                                  /* CA_FAT_ATTR_*          */
+    char name[CA_FAT_NAME_MAX];
+} ca_fat_info_t;
+
+i32 ca_fat_fopen(ca_fat_file_t **out, const char *path, u8 mode);
+i32 ca_fat_fclose(ca_fat_file_t *f);            /* frees the handle */
+i32 ca_fat_fread(ca_fat_file_t *f, void *buf, u32 len, u32 *got);
+i32 ca_fat_fwrite(ca_fat_file_t *f, const void *buf, u32 len, u32 *put);
+i32 ca_fat_fseek(ca_fat_file_t *f, u32 pos);
+u32 ca_fat_ftell(const ca_fat_file_t *f);
+u32 ca_fat_fsize(const ca_fat_file_t *f);
+i32 ca_fat_fsync(ca_fat_file_t *f);
+
+i32 ca_fat_dopen(ca_fat_dir_t **out, const char *path);
+i32 ca_fat_dread(ca_fat_dir_t *d, ca_fat_info_t *info); /* name "" = end */
+i32 ca_fat_dclose(ca_fat_dir_t *d);             /* frees the handle */
+
+i32 ca_fat_pstat(const char *path, ca_fat_info_t *info);
+i32 ca_fat_pmkdir(const char *path);
+i32 ca_fat_punlink(const char *path);           /* file or empty dir */
+i32 ca_fat_prename(const char *from, const char *to);
+/* cluster size in bytes, clusters in all, clusters free */
+i32 ca_fat_statvfs(u32 *cluster_bytes, u32 *total, u32 *free_clst);
+
 /* ---- Encrypted files (EN_FAT_CRYPT) ---------------------------------------
  * The file goes through the AES channel (aes_channel_service) synchronously:
  * on write the plaintext is fed to the channel in chunks of FAT_CRYPT_CHUNK

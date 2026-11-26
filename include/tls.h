@@ -16,7 +16,10 @@
  *
  * What is negotiated - and nothing else:
  *   version        TLS 1.3 only (supported_versions 0x0304)
- *   cipher suite   TLS_AES_128_GCM_SHA256 (0x1301), the mandatory one
+ *   cipher suite   TLS_AES_256_GCM_SHA384 (0x1302) when the client offers it
+ *                  and EN_SHA512 is on, else TLS_AES_128_GCM_SHA256 (0x1301),
+ *                  the mandatory one. SHA-384 only in the key schedule: the
+ *                  records cost the same AES-GCM either way.
  *   key exchange   X25519 key share
  *   signature      ecdsa_secp256r1_sha256 (0x0403), server certificate P-256
  *   ALPN           the configured protocol if the client offers it
@@ -45,6 +48,9 @@
 #include "common.h"
 #include "sha256.h"
 #include "aes.h"
+#if EN_SHA512
+#include "sha512.h"
+#endif
 
 #if EN_TLS
 
@@ -57,6 +63,7 @@
 #define TLS_TX_RECORD       2048U                    /* our records: plaintext max */
 #define TLS_TX_BUF_SIZE     (5U + TLS_TX_RECORD + 1U + 16U)
 #define TLS_HS_BUF_SIZE     4096U                    /* ClientHello reassembly */
+#define TLS_HASH_MAX        48U                      /* SHA-384 */
 
 /* ca_tls_read() results other than a byte count */
 #define TLS_READ_TIMEOUT    0
@@ -100,13 +107,29 @@ typedef struct {
     ca_aes_ctx_t aes;
     u8           iv[12];
     u64          seq;
-    u8           secret[32];            /* traffic secret, for KeyUpdate */
+    u8           secret[TLS_HASH_MAX];  /* traffic secret, for KeyUpdate */
 } ca_tls_dir_t;
+
+/* Working context of the key schedule: transcript copies, HMAC, Hash("").
+ * One suite per session (hl 32 or 48), so the two share the memory. */
+typedef union {
+    ca_hmac_sha256_ctx_t    h256;           /* SHA-256 suite */
+    ca_x25519_ctx_t         x25519;         /* ECDHE, before the key schedule */
+#if EN_SHA512
+    ca_sha512_ctx_t         s384;           /* SHA-384 suite */
+#endif
+} ca_tls_work_t;
 
 typedef struct {
     ca_tls_io_t             io;
     const ca_tls_config_t  *cfg;
-    ca_sha256_ctx_t         transcript;
+    ca_sha256_ctx_t         transcript;     /* SHA-256 suite */
+#if EN_SHA512
+    ca_sha512_ctx_t         transcript384;  /* SHA-384 suite */
+#endif
+    ca_tls_work_t           work;           /* never on the task stack */
+    u16                     suite;          /* negotiated: 0x1301 or 0x1302 */
+    u8                      hl;             /* hash length: 32 or 48 */
     ca_tls_dir_t            rd;
     ca_tls_dir_t            wr;
     bool                    rd_encrypted;

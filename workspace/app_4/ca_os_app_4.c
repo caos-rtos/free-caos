@@ -163,15 +163,10 @@ static u32 task_app(void *arg)
     return 0U;
 }
 
-static bool img_cli(c_str *pcmd)
+/* img — the line arrives without the command word */
+static bool img_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("img       : info | confirm  (image started by the bootloader)");
-        return false;
-    }
-    if (ca_strncmp(p, "img", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "confirm", 7) == 0) {
         ca_boot_confirm();
         CLI_PUT_N(ca_boot_is_trial() ? "img: confirmed" : "img: not a trial, nothing to confirm");
@@ -184,7 +179,13 @@ static bool img_cli(c_str *pcmd)
     return true;
 }
 
-static ca_cli_node_t s_img_node = { img_cli, NULL };
+static const ca_cli_cmd_t s_img_cmds[] = {
+    { "img", "img       : info | confirm  (image started by the bootloader)", { img_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_img_table = {
+    "img", s_img_cmds, (u16)(sizeof(s_img_cmds) / sizeof(s_img_cmds[0])), NULL
+};
 
 void ca_os_configure(void)
 {
@@ -198,7 +199,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_img_node);
+        ca_cli_register_table(&s_img_table);
     )
     ca_flash_init();
     eth_gpio_init();

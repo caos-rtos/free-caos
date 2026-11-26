@@ -83,7 +83,7 @@
 #   bench_net.sh ns-usb iperf <ip> <secs> [up|down|dual] [streams]
 #                                            iperf2 client from inside it (ex96)
 #   bench_net.sh ns-router up|down|status    the two PCs of app_3 (caos_rA/rB)
-#   bench_net.sh ns-router ping A|B <ip> [n] ping from inside one of them
+#   bench_net.sh ns-router ping A|B <ip> [n] [size] [df|nodf]  ping from inside one of them
 #   bench_net.sh eth  up|down [iface]    only one interface on the subnet
 #   bench_net.sh eth  bounce [seconds]   carrier away and back, bench untouched
 #   bench_net.sh txq  one|restore|status [iface]   single TX queue (see ex85)
@@ -1788,9 +1788,13 @@ ns-router)
         ip_arg="${4:-}"
         cnt="${5:-3}"
         [[ "$ip_arg" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "ping: bad address '$ip_arg'"
+        size="${6:-56}"
+        df="${7:-nodf}"
         [[ "$cnt" =~ ^[0-9]{1,3}$ ]] && [ "$cnt" -ge 1 ] && [ "$cnt" -le 100 ] \
             || die "ping: count 1..100"
-        exec ip netns exec "$ns" ping -c "$cnt" -W 2 "$ip_arg"
+        [[ "$size" =~ ^[0-9]{1,4}$ ]] && [ "$size" -le 8000 ] || die "ping: size 0..8000"
+        case "$df" in df) pmtu=do ;; nodf) pmtu=dont ;; *) die "ping: df|nodf" ;; esac
+        exec ip netns exec "$ns" ping -c "$cnt" -W 2 -s "$size" -M "$pmtu" "$ip_arg"
         ;;
     iperf-s)
         # iperf2 server inside A or B, for <secs> at most (the caller puts it
@@ -1835,7 +1839,7 @@ ns-router)
         done
         ;;
     *)
-        die "ns-router: up | down | status | ping A|B <ip> [count] | iperf-s A|B <port> <secs> udp|tcp | iperf A|B <ip> <port> <secs> udp|tcp [mbps] [len]"
+        die "ns-router: up | down | status | ping A|B <ip> [count] [size] [df|nodf] | iperf-s A|B <port> <secs> udp|tcp | iperf A|B <ip> <port> <secs> udp|tcp [mbps] [len]"
         ;;
     esac
     ;;

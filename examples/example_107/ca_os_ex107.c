@@ -195,20 +195,10 @@ static void ex107_wire(void)
 }
 
 #if ENABLE_CLI
-static void ex107_usage(void)
+/* comp — the line arrives without the command word */
+static bool comp_cmd(c_str *args)
 {
-    CLI_PUT_N("comp      : test [threshold 0-4095] | all");
-    CLI_PUT_N("wire      : DAC CH2 -> COMP1 input jumper continuity as plain GPIO, then reboot");
-}
-
-static bool ex107_cli(c_str *pcmd)
-{
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) { ex107_usage(); return false; }
-    if (ca_strncmp(p, "wire", 4) == 0) { ex107_wire(); return true; }
-    if (ca_strncmp(p, "comp", 4) != 0) return false;
-    p = ca_skip_sp(p + 4);
-
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "all", 3) == 0) { ex107_all(); return true; }
     if (ca_strncmp(p, "test", 4) == 0) {
         p = ca_skip_sp(p + 4);
@@ -218,10 +208,24 @@ static bool ex107_cli(c_str *pcmd)
         ex107_test(thr);
         return true;
     }
-    ex107_usage();
+    return false;                   /* cli prints the help line */
+}
+
+static bool wire_cmd(c_str *args)
+{
+    (void)args;
+    ex107_wire();
     return true;
 }
-static ca_cli_node_t s_cli = { ex107_cli, NULL };
+
+static const ca_cli_cmd_t s_ex107_cmds[] = {
+    { "comp", "comp      : test [threshold 0-4095] | all", { comp_cmd, STACK_MEDIUM } },
+    { "wire", "wire      : DAC CH2 -> COMP1 input jumper continuity as plain GPIO, then reboot", { wire_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_ex107_table = {
+    "ex107", s_ex107_cmds, (u16)(sizeof(s_ex107_cmds) / sizeof(s_ex107_cmds[0])), NULL
+};
 #endif
 
 PRIVATE_STRING(why, "ex107: this part has no comparator with a DAC input (U575 and H753 have it)");
@@ -246,7 +250,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_cli);
+        ca_cli_register_table(&s_ex107_table);
     )
 }
 

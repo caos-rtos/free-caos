@@ -39,6 +39,15 @@
 void* ca_memcpy(volatile void *dest, const void *src, u32 count);
 
 /**
+ * @brief Copy memory, the two areas may overlap
+ * @param dest Destination
+ * @param src Source
+ * @param count Number of bytes
+ * @return Pointer to dest
+ */
+void* ca_memmove(volatile void *dest, const void *src, u32 count);
+
+/**
  * @brief Set memory to a value (byte by byte)
  * @param dest Destination
  * @param value Value to write
@@ -129,6 +138,14 @@ i32 ca_stricmp(const char *s1, const char *s2);
  * @return 0 if equal, <0 if s1 < s2, >0 if s1 > s2
  */
 i32 ca_strncmp(const char *s1, const char *s2, u32 max);
+
+/**
+ * @brief First occurrence of a character in a string
+ * @param s String
+ * @param c Character (as unsigned char); '\0' finds the terminator
+ * @return Pointer to the character, or NULL if absent
+ */
+char* ca_strchr(const char *s, i32 c);
 
 /**
  * @brief Copy string

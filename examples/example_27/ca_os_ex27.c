@@ -139,202 +139,207 @@ static u32 task_monitor(void *arg)
  * CLI — local to this example
  * ========================================================================== */
 
-static bool user_cli_handler(c_str *pcmd)
+/* one entry per command word; each gets the line without its word */
+static bool info_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) {
-        /* The commands are registered bare - "test", "info", "wire" (see the
-         * strncmp chain below) - so the help must name them bare too. It read
-         * "ex27 : test | info | wire", which promises a prefix that does not
-         * exist: typing what the help showed answered "huh!". Same shape the
-         * other examples use ("hello | status | show | wire" in ex21). */
-#if MCU_ID == 575
-        CLI_PUT_N("test (sweep DAC->ADC) | info | wire | adcmap (CH15-17 pins, no wire)");
-#else
-        CLI_PUT_N("test (sweep DAC->ADC) | info | wire");
-#endif
-        return false;
-    }
-    if (ca_strncmp(p, "info", 4) == 0) {
-        CLI_PUT_N("--- Example 27: DAC out + ADC readback ---");
-        CLI_PUT_N("  jumper : " WIRE_TXT);
-        CLI_PUT_N("  dac    : " DAC_TXT);
-        CLI_PUT_N("  adc    : " ADC_TXT);
-        u16 raw = ca_adc_read(ADC_NUM, ADC_CHANNEL);
-        u32 mv  = ((u32)raw * VREF_MV) / 4095U;
-        CLI_PRINTF_N("  reading: raw=%u  %u.%03uV", (u32)raw, mv / 1000U, mv % 1000U);
-        return true;
-    }
-    if (ca_strncmp(p, "test", 4) == 0) {
-        /* DAC sweep with ADC readback. Both peripherals are 12-bit over the
-         * same VREF, so with the jumper in place the ADC should read back
-         * whatever the DAC was told to output, within tolerance.
-         * Tolerance is 5% OF FULL SCALE (205 counts), not 5% of the reading:
-         * near zero the relative error explodes on a couple of LSB of offset
-         * and every low step would be reported as a failure. */
-        static const u16 TOL = (4095U * 5U) / 100U;   /* 205 counts */
-        u32 steps = 0, bad = 0;
-        u16 worst_dev = 0, worst_set = 0, worst_got = 0;
-
-        CLI_PUT_N("--- EX27 test: DAC sweep -> ADC readback ---");
-        CLI_PUT_N("  " WIRE_TXT);
-        CLI_PRINTF_N("  tolerance: +-%u count (5%% full scale)", (u32)TOL);
-        CLI_PUT_N("   set    read     delta   mV      result");
-
-        for (u32 v = 0; v <= 4000U; v += 500U) {
-            u16 set = (u16)v;
-            ca_dac_write(DAC_CHANNEL, set);
-            ca_os_sleep(50);                     /* DAC settling + ADC ready */
-
-            /* ONE conversion per step, taken at face value. This is also a test
-             * of the driver itself: ca_adc_hw_read() already waits out the
-             * previous conversion and lets the PCSEL analog switch settle, so a
-             * single read must be right the first time. The step used to be read
-             * twice and only the second value kept — a workaround from when the
-             * driver returned the previous channel's residue. If a step starts
-             * failing here, the settling belongs back in the driver, not in the
-             * example: averaging is not the answer either, since on U5 every
-             * ca_adc_read() rewrites PCSEL and reopens the switch, so the
-             * samples that follow immediately are garbage (the mean sat at a
-             * fixed 1421 whatever the DAC was doing). */
-            u16 got = ca_adc_read(ADC_NUM, ADC_CHANNEL);
-
-            u16 dev = (got > set) ? (u16)(got - set) : (u16)(set - got);
-            bool ok = (dev <= TOL);
-            u32 mv  = ((u32)got * VREF_MV) / 4095U;
-
-            CLI_PRINTF_N("  %4u    %4u    %4u   %u.%03u   %s",
-                         (u32)set, (u32)got, (u32)dev,
-                         mv / 1000U, mv % 1000U, ok ? "OK" : "FAIL");
-            if (!ok) bad++;
-            if (dev > worst_dev) { worst_dev = dev; worst_set = set; worst_got = got; }
-            steps++;
-        }
-
-        ca_dac_write(DAC_CHANNEL, 0U);           /* leave the output at rest */
-
-        CLI_PUT_N("  ------------------------------------------------");
-        CLI_PRINTF_N("  max deviation: %u count (set=%u read=%u)",
-                     (u32)worst_dev, (u32)worst_set, (u32)worst_got);
-        if (bad == 0U)
-            CLI_PRINTF_N("  RESULT: PASS  (%u/%u steps within 5%%)", steps, steps);
-        else
-            CLI_PRINTF_N("  RESULT: ERROR (%u/%u steps out of tolerance) - jumper? try 'wire'",
-                         bad, steps);
-        return true;
-    }
-#if MCU_ID == 575
-    if (ca_strncmp(p, "adcmap", 6) == 0) {
-        /* ADC1 IN13..IN17 -> pin, from the DS13737 pin table. No wire: the pin is
-         * driven as a digital output, then ca_adc_pin_init() turns it analog and
-         * ca_adc_read() samples the charge still on the floating pad. Only the right pin moves
-         * the reading, and the driver must leave THAT pin in analog mode.
-         * CH13/14 (PC4/PC5) are left out: those pads are on no Nucleo connector
-         * (UM2861 morpho tables) and held no charge on the bench (26/10). */
-        static const struct { u8 ch; ca_gpio_port_t port; u8 pin; char name[4]; } MAP[] = {
-            { 15U, CA_GPIO_PORT_B, CA_GPIO_PIN_0, "PB0" },
-            { 16U, CA_GPIO_PORT_B, CA_GPIO_PIN_1, "PB1" },
-            { 17U, CA_GPIO_PORT_B, CA_GPIO_PIN_2, "PB2" },
-        };
-        u32 bad = 0;
-        for (u32 i = 0; i < sizeof(MAP) / sizeof(MAP[0]); i++) {
-            u16 r[2];
-            ca_gpio_init_port(MAP[i].port);
-            for (u32 lvl = 0; lvl < 2U; lvl++) {
-                ca_gpio_configure(MAP[i].port, MAP[i].pin, CA_GPIO_MODE_OUTPUT,
-                                  CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
-                ca_gpio_write(MAP[i].port, MAP[i].pin, (u8)lvl);
-                ca_os_sleep(1);
-                ca_adc_pin_init(ADC_NUM, MAP[i].ch);
-                r[lvl] = ca_adc_read(ADC_NUM, MAP[i].ch);
-            }
-            const GPIO_TypeDef *g = ca_gpio_get_io_port(MAP[i].port);
-            const bool analog = ((g->MODER >> (MAP[i].pin * 2U)) & 3U) == 3U;
-
-            /* Which channel does this pad really reach? Same charge trick, the
-             * pad made analog by hand, every channel 1..19 read for each level. */
-            u16 s[2][20];
-            for (u32 lvl = 0; lvl < 2U; lvl++) {
-                ca_gpio_configure(MAP[i].port, MAP[i].pin, CA_GPIO_MODE_OUTPUT,
-                                  CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
-                ca_gpio_write(MAP[i].port, MAP[i].pin, (u8)lvl);
-                ca_os_sleep(1);
-                ca_gpio_configure(MAP[i].port, MAP[i].pin, CA_GPIO_MODE_ANALOG,
-                                  CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
-                for (u8 ch = 1U; ch <= 19U; ch++) s[lvl][ch] = ca_adc_read(ADC_NUM, ch);
-            }
-            u8 best = 0U;
-            i32 best_d = 0;
-            for (u8 ch = 1U; ch <= 19U; ch++) {
-                const i32 d = (i32)s[1][ch] - (i32)s[0][ch];
-                if (d > best_d) { best_d = d; best = ch; }
-            }
-
-            const bool ok = analog && r[1] > r[0] + 1000U && best == MAP[i].ch;
-            if (!ok) bad++;
-            CLI_PRINTF_N("  CH%u %s  low %4u  high %4u  pin %s  scan: CH%u +%d  %s",
-                         (u32)MAP[i].ch, MAP[i].name, (u32)r[0], (u32)r[1],
-                         analog ? "analog" : "NOT analog", (u32)best, best_d,
-                         ok ? "OK" : "FAIL");
-        }
-        CLI_PRINTF_N("  ADCMAP RESULT: %s", bad == 0U ? "PASS" : "FAIL");
-        return true;
-    }
-#endif
-    if (ca_strncmp(p, "wire", 4) == 0) {
-        /* DIGITAL continuity test of the jumper: PA4 and PC0 are analog here,
-         * so they are temporarily reconfigured as plain GPIO — push-pull out
-         * and input — and driven low/high. This answers "is the wire there"
-         * without depending on DAC or ADC being correct.
-         * The two pins do NOT go back to analog afterwards: reset the board
-         * to resume the DAC/ADC measurement. */
-        /* Park BOTH peripherals before touching the pins. Writing 0 to the DAC
-         * is not enough: while the channel is enabled its output buffer stays
-         * connected to PA4 and fights the GPIO. The ADC likewise keeps the
-         * analog switch in the PC0 pad closed while ADEN is set. */
-        ca_dac_stop(DAC_CHANNEL);
-        ca_adc_stop(ADC_NUM);
-
-        /* ca_gpio_configure() does NOT enable the port clock — ca_gpio_init_port()
-         * does, and this example never called it (the DAC/ADC drivers only set
-         * up their own pins). Without this the writes land nowhere and the test
-         * reports a missing jumper on a good one. */
-        ca_gpio_init_port(WIRE_OUT_PORT);
-        ca_gpio_init_port(WIRE_IN_PORT);
-
-        ca_gpio_configure(WIRE_OUT_PORT, WIRE_OUT_PIN, CA_GPIO_MODE_OUTPUT,
-                          CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
-        ca_gpio_configure(WIRE_IN_PORT, WIRE_IN_PIN, CA_GPIO_MODE_INPUT,
-                          CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_PULLDOWN, 0);
-
-        ca_gpio_write(WIRE_OUT_PORT, WIRE_OUT_PIN, 0);
-        for (volatile u32 d = 0; d < 20000U; d++) { }
-        u8 lo = ca_gpio_read(WIRE_IN_PORT, WIRE_IN_PIN);
-        ca_gpio_write(WIRE_OUT_PORT, WIRE_OUT_PIN, 1);
-        for (volatile u32 d = 0; d < 20000U; d++) { }
-        u8 hi = ca_gpio_read(WIRE_IN_PORT, WIRE_IN_PIN);
-
-        CLI_PUT_N("  " WIRE_TXT);
-        CLI_PRINTF_N("  drive0->read%u  drive1->read%u  %s", lo, hi,
-                     (lo == 0 && hi == 1) ? "OK (jumper present)"
-                                          : "FAIL (jumper missing or wrong)");
-        /* One line the bench can read, identical in every example that has a
-         * `wire` command - see the note in ex64. */
-        CLI_PRINTF_N("  WIRE RESULT : %s  (%u/1)",
-                     (lo == 0 && hi == 1) ? "OK" : "FAIL",
-                     (u32)((lo == 0 && hi == 1) ? 1U : 0U));
-        /* DAC and ADC are now stopped and the pins are plain GPIO, so there is
-         * no way back to the analog measurement from here: reboot instead of
-         * asking the user to press the button. */
-        CLI_PUT_N("  rebooting in 2.5 s to restore the analog measurement...");
-        ca_os_sleep(2500);         /* leave the result on screen, then reboot */
-        ca_os_reset();
-        return true;
-    }
-    return false;
+    (void)args;
+    CLI_PUT_N("--- Example 27: DAC out + ADC readback ---");
+    CLI_PUT_N("  jumper : " WIRE_TXT);
+    CLI_PUT_N("  dac    : " DAC_TXT);
+    CLI_PUT_N("  adc    : " ADC_TXT);
+    u16 raw = ca_adc_read(ADC_NUM, ADC_CHANNEL);
+    u32 mv  = ((u32)raw * VREF_MV) / 4095U;
+    CLI_PRINTF_N("  reading: raw=%u  %u.%03uV", (u32)raw, mv / 1000U, mv % 1000U);
+    return true;
 }
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
+
+static bool test_cmd(c_str *args)
+{
+    (void)args;
+    /* DAC sweep with ADC readback. Both peripherals are 12-bit over the
+     * same VREF, so with the jumper in place the ADC should read back
+     * whatever the DAC was told to output, within tolerance.
+     * Tolerance is 5% OF FULL SCALE (205 counts), not 5% of the reading:
+     * near zero the relative error explodes on a couple of LSB of offset
+     * and every low step would be reported as a failure. */
+    static const u16 TOL = (4095U * 5U) / 100U;   /* 205 counts */
+    u32 steps = 0, bad = 0;
+    u16 worst_dev = 0, worst_set = 0, worst_got = 0;
+
+    CLI_PUT_N("--- EX27 test: DAC sweep -> ADC readback ---");
+    CLI_PUT_N("  " WIRE_TXT);
+    CLI_PRINTF_N("  tolerance: +-%u count (5%% full scale)", (u32)TOL);
+    CLI_PUT_N("   set    read     delta   mV      result");
+
+    for (u32 v = 0; v <= 4000U; v += 500U) {
+        u16 set = (u16)v;
+        ca_dac_write(DAC_CHANNEL, set);
+        ca_os_sleep(50);                     /* DAC settling + ADC ready */
+
+        /* ONE conversion per step, taken at face value. This is also a test
+         * of the driver itself: ca_adc_hw_read() already waits out the
+         * previous conversion and lets the PCSEL analog switch settle, so a
+         * single read must be right the first time. The step used to be read
+         * twice and only the second value kept — a workaround from when the
+         * driver returned the previous channel's residue. If a step starts
+         * failing here, the settling belongs back in the driver, not in the
+         * example: averaging is not the answer either, since on U5 every
+         * ca_adc_read() rewrites PCSEL and reopens the switch, so the
+         * samples that follow immediately are garbage (the mean sat at a
+         * fixed 1421 whatever the DAC was doing). */
+        u16 got = ca_adc_read(ADC_NUM, ADC_CHANNEL);
+
+        u16 dev = (got > set) ? (u16)(got - set) : (u16)(set - got);
+        bool ok = (dev <= TOL);
+        u32 mv  = ((u32)got * VREF_MV) / 4095U;
+
+        CLI_PRINTF_N("  %4u    %4u    %4u   %u.%03u   %s",
+                     (u32)set, (u32)got, (u32)dev,
+                     mv / 1000U, mv % 1000U, ok ? "OK" : "FAIL");
+        if (!ok) bad++;
+        if (dev > worst_dev) { worst_dev = dev; worst_set = set; worst_got = got; }
+        steps++;
+    }
+
+    ca_dac_write(DAC_CHANNEL, 0U);           /* leave the output at rest */
+
+    CLI_PUT_N("  ------------------------------------------------");
+    CLI_PRINTF_N("  max deviation: %u count (set=%u read=%u)",
+                 (u32)worst_dev, (u32)worst_set, (u32)worst_got);
+    if (bad == 0U)
+        CLI_PRINTF_N("  RESULT: PASS  (%u/%u steps within 5%%)", steps, steps);
+    else
+        CLI_PRINTF_N("  RESULT: ERROR (%u/%u steps out of tolerance) - jumper? try 'wire'",
+                     bad, steps);
+    return true;
+}
+
+#if MCU_ID == 575
+static bool adcmap_cmd(c_str *args)
+{
+    (void)args;
+    /* ADC1 IN13..IN17 -> pin, from the DS13737 pin table. No wire: the pin is
+     * driven as a digital output, then ca_adc_pin_init() turns it analog and
+     * ca_adc_read() samples the charge still on the floating pad. Only the right pin moves
+     * the reading, and the driver must leave THAT pin in analog mode.
+     * CH13/14 (PC4/PC5) are left out: those pads are on no Nucleo connector
+     * (UM2861 morpho tables) and held no charge on the bench (26/10). */
+    static const struct { u8 ch; ca_gpio_port_t port; u8 pin; char name[4]; } MAP[] = {
+        { 15U, CA_GPIO_PORT_B, CA_GPIO_PIN_0, "PB0" },
+        { 16U, CA_GPIO_PORT_B, CA_GPIO_PIN_1, "PB1" },
+        { 17U, CA_GPIO_PORT_B, CA_GPIO_PIN_2, "PB2" },
+    };
+    u32 bad = 0;
+    for (u32 i = 0; i < sizeof(MAP) / sizeof(MAP[0]); i++) {
+        u16 r[2];
+        ca_gpio_init_port(MAP[i].port);
+        for (u32 lvl = 0; lvl < 2U; lvl++) {
+            ca_gpio_configure(MAP[i].port, MAP[i].pin, CA_GPIO_MODE_OUTPUT,
+                              CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
+            ca_gpio_write(MAP[i].port, MAP[i].pin, (u8)lvl);
+            ca_os_sleep(1);
+            ca_adc_pin_init(ADC_NUM, MAP[i].ch);
+            r[lvl] = ca_adc_read(ADC_NUM, MAP[i].ch);
+        }
+        const GPIO_TypeDef *g = ca_gpio_get_io_port(MAP[i].port);
+        const bool analog = ((g->MODER >> (MAP[i].pin * 2U)) & 3U) == 3U;
+
+        /* Which channel does this pad really reach? Same charge trick, the
+         * pad made analog by hand, every channel 1..19 read for each level. */
+        u16 s[2][20];
+        for (u32 lvl = 0; lvl < 2U; lvl++) {
+            ca_gpio_configure(MAP[i].port, MAP[i].pin, CA_GPIO_MODE_OUTPUT,
+                              CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
+            ca_gpio_write(MAP[i].port, MAP[i].pin, (u8)lvl);
+            ca_os_sleep(1);
+            ca_gpio_configure(MAP[i].port, MAP[i].pin, CA_GPIO_MODE_ANALOG,
+                              CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
+            for (u8 ch = 1U; ch <= 19U; ch++) s[lvl][ch] = ca_adc_read(ADC_NUM, ch);
+        }
+        u8 best = 0U;
+        i32 best_d = 0;
+        for (u8 ch = 1U; ch <= 19U; ch++) {
+            const i32 d = (i32)s[1][ch] - (i32)s[0][ch];
+            if (d > best_d) { best_d = d; best = ch; }
+        }
+
+        const bool ok = analog && r[1] > r[0] + 1000U && best == MAP[i].ch;
+        if (!ok) bad++;
+        CLI_PRINTF_N("  CH%u %s  low %4u  high %4u  pin %s  scan: CH%u +%d  %s",
+                     (u32)MAP[i].ch, MAP[i].name, (u32)r[0], (u32)r[1],
+                     analog ? "analog" : "NOT analog", (u32)best, best_d,
+                     ok ? "OK" : "FAIL");
+    }
+    CLI_PRINTF_N("  ADCMAP RESULT: %s", bad == 0U ? "PASS" : "FAIL");
+    return true;
+}
+#endif
+
+static bool wire_cmd(c_str *args)
+{
+    (void)args;
+    /* DIGITAL continuity test of the jumper: PA4 and PC0 are analog here,
+     * so they are temporarily reconfigured as plain GPIO — push-pull out
+     * and input — and driven low/high. This answers "is the wire there"
+     * without depending on DAC or ADC being correct.
+     * The two pins do NOT go back to analog afterwards: reset the board
+     * to resume the DAC/ADC measurement. */
+    /* Park BOTH peripherals before touching the pins. Writing 0 to the DAC
+     * is not enough: while the channel is enabled its output buffer stays
+     * connected to PA4 and fights the GPIO. The ADC likewise keeps the
+     * analog switch in the PC0 pad closed while ADEN is set. */
+    ca_dac_stop(DAC_CHANNEL);
+    ca_adc_stop(ADC_NUM);
+
+    /* ca_gpio_configure() does NOT enable the port clock — ca_gpio_init_port()
+     * does, and this example never called it (the DAC/ADC drivers only set
+     * up their own pins). Without this the writes land nowhere and the test
+     * reports a missing jumper on a good one. */
+    ca_gpio_init_port(WIRE_OUT_PORT);
+    ca_gpio_init_port(WIRE_IN_PORT);
+
+    ca_gpio_configure(WIRE_OUT_PORT, WIRE_OUT_PIN, CA_GPIO_MODE_OUTPUT,
+                      CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
+    ca_gpio_configure(WIRE_IN_PORT, WIRE_IN_PIN, CA_GPIO_MODE_INPUT,
+                      CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_PULLDOWN, 0);
+
+    ca_gpio_write(WIRE_OUT_PORT, WIRE_OUT_PIN, 0);
+    for (volatile u32 d = 0; d < 20000U; d++) { }
+    u8 lo = ca_gpio_read(WIRE_IN_PORT, WIRE_IN_PIN);
+    ca_gpio_write(WIRE_OUT_PORT, WIRE_OUT_PIN, 1);
+    for (volatile u32 d = 0; d < 20000U; d++) { }
+    u8 hi = ca_gpio_read(WIRE_IN_PORT, WIRE_IN_PIN);
+
+    CLI_PUT_N("  " WIRE_TXT);
+    CLI_PRINTF_N("  drive0->read%u  drive1->read%u  %s", lo, hi,
+                 (lo == 0 && hi == 1) ? "OK (jumper present)"
+                                      : "FAIL (jumper missing or wrong)");
+    /* One line the bench can read, identical in every example that has a
+     * `wire` command - see the note in ex64. */
+    CLI_PRINTF_N("  WIRE RESULT : %s  (%u/1)",
+                 (lo == 0 && hi == 1) ? "OK" : "FAIL",
+                 (u32)((lo == 0 && hi == 1) ? 1U : 0U));
+    /* DAC and ADC are now stopped and the pins are plain GPIO, so there is
+     * no way back to the analog measurement from here: reboot instead of
+     * asking the user to press the button. */
+    CLI_PUT_N("  rebooting in 2.5 s to restore the analog measurement...");
+    ca_os_sleep(2500);         /* leave the result on screen, then reboot */
+    ca_os_reset();
+    return true;
+}
+
+static const ca_cli_cmd_t s_user_cmds[] = {
+    { "info", "info      : wiring, DAC and ADC configuration", { info_cmd, STACK_MEDIUM } },
+    { "test", "test      : sweep the DAC, read back with the ADC", { test_cmd, STACK_MEDIUM } },
+#if MCU_ID == 575
+    { "adcmap", "adcmap    : ADC CH15-17 pins, no wire needed", { adcmap_cmd, STACK_MEDIUM } },
+#endif
+    { "wire", "wire      : continuity test of the jumper (reboots after)", { wire_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_user_table = {
+    "user", s_user_cmds, (u16)(sizeof(s_user_cmds) / sizeof(s_user_cmds[0])), NULL
+};
 
 
 /* ============================================================================
@@ -371,7 +376,7 @@ void ca_os_main(void)
 {
     ca_os_job("monitor", CA_TH_LEVEL3, task_monitor, NULL, STACK_SMALL, CA_JOB_STD, CA_FAULT_RESTART_THREAD);
 
-    EVAL_CLI( ca_cli_register(&s_user_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_user_table); )
 
     ca_os_run(true);
 }

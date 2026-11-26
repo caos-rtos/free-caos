@@ -279,20 +279,10 @@ static const char *ex103_num(const char *p, u32 *v)
     return p;
 }
 
-static void ex103_usage(void)
+/* sai — the line arrives without the command word */
+static bool sai_cmd(c_str *args)
 {
-    CLI_PUT_N("sai       : test [fs] [16|24|32] [i2s|msb] | all | info");
-    CLI_PUT_N("wire      : SD_A -> SD_B jumper continuity as plain GPIO, then reboot");
-}
-
-static bool ex103_cli(c_str *pcmd)
-{
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) { ex103_usage(); return false; }
-    if (ca_strncmp(p, "wire", 4) == 0) { ex103_wire(); return true; }
-    if (ca_strncmp(p, "sai", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
-
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "all", 3) == 0) { ex103_all(); return true; }
     if (ca_strncmp(p, "info", 4) == 0) {
         CLI_PRINTF_N("SAI fs %u -> %u Hz, %u bit, %s, errors %02X", s_cfg.fs_hz, ca_sai_fs(),
@@ -314,10 +304,24 @@ static bool ex103_cli(c_str *pcmd)
         ex103_test();
         return true;
     }
-    ex103_usage();
+    return false;                   /* cli prints the help line */
+}
+
+static bool wire_cmd(c_str *args)
+{
+    (void)args;
+    ex103_wire();
     return true;
 }
-static ca_cli_node_t s_cli = { ex103_cli, NULL };
+
+static const ca_cli_cmd_t s_ex103_cmds[] = {
+    { "sai", "sai       : test [fs] [16|24|32] [i2s|msb] | all | info", { sai_cmd, STACK_MEDIUM } },
+    { "wire", "wire      : SD_A -> SD_B jumper continuity as plain GPIO, then reboot", { wire_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_ex103_table = {
+    "ex103", s_ex103_cmds, (u16)(sizeof(s_ex103_cmds) / sizeof(s_ex103_cmds[0])), NULL
+};
 #endif
 
 PRIVATE_STRING(why, "ex103: this part has no SAI1 (F446, F767, H753, H563 and U575 have it)");
@@ -342,7 +346,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_cli);
+        ca_cli_register_table(&s_ex103_table);
     )
 }
 

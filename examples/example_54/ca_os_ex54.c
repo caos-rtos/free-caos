@@ -95,7 +95,7 @@ static void ncm_rx_frame(const u8 *eth, u16 len)
 static ca_usb_ncm_cfg_t s_ncm = {
     .header = { CA_USB_TYPE_NCM, &ca_usb_ncm_ops },
     .mps    = 64U,
-    .mac    = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x01U },
+    .mac    = CA_EXAMPLE_MAC_HOST(54),
     .on_rx  = ncm_rx_frame,
 };
 
@@ -142,16 +142,22 @@ static u32 task_hb(void *arg)
 /* ── Diagnostic CLI ──────────────────────────────────────────────────────── */
 
 #if ENABLE_CLI
-static bool ncm_cli_handler(c_str *pcmd)
+/* ncm — the line arrives without the command word */
+static bool ncm_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "ncm", 3) != 0) return false;
+    (void)args;
     CLI_PRINTF_N("ncm: link=%s rx=%lu tx=%lu",
                  ca_usb_ncm_is_up() ? "up" : "down",
                  (u32)s_rx_count, (u32)s_tx_count);
     return true;
 }
-static ca_cli_node_t s_ncm_cli = { ncm_cli_handler, NULL };
+static const ca_cli_cmd_t s_ncm_cmds[] = {
+    { "ncm", "ncm       : link state and rx/tx counters", { ncm_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_ncm_table = {
+    "ncm", s_ncm_cmds, (u16)(sizeof(s_ncm_cmds) / sizeof(s_ncm_cmds[0])), NULL
+};
 #endif
 
 /* ── Entry point ──────────────────────────────────────────────────────────── */
@@ -167,7 +173,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_ncm_cli);
+        ca_cli_register_table(&s_ncm_table);
     )
 }
 

@@ -51,6 +51,10 @@ typedef struct {
      * re-expansion (CPU) and no 240B scratch on the caller stack (matters under
      * SW crypto, e.g. SSH on F407). Compiled out where a HW IP is present. */
     u32  sw_rk[60];
+    /* GCM: i * H for the 16 nibble values (low/high 64 bits), computed with
+     * the schedule; the 4-bit GHASH reads it (256 B, 20/11/2026) */
+    u64  sw_ghl[16];
+    u64  sw_ghh[16];
     bool sw_ready;   /* sw_rk holds a valid schedule for the current key */
     u8   sw_nr;      /* rounds of sw_rk: 10 (AES-128) or 14 (AES-256) */
 #endif
@@ -58,6 +62,11 @@ typedef struct {
 
 /* init hardware CRYP (call once) */
 bool ca_aes_init(void);
+
+/* true where the part has an AES engine (CRYP or AES, from the CMSIS device
+ * header: H753, H773, F439 ...), false where aes.c runs its software path.
+ * Known at build time, needs no ca_aes_init(). */
+bool ca_aes_is_hw(void);
 
 /* configure context (mode, key, iv) */
 bool ca_aes_ctx_setup(ca_aes_ctx_t *ctx, ca_aes_mode_t mode,

@@ -29,7 +29,23 @@ import time
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 BENCH_NET = os.path.join(REPO, "tools", "bench_net.sh")
-BOARD_MAC = "02:ca:05:00:00:87"
+
+
+def example_mac(example, role=0xCA):
+    """The example's MAC: 02:<role>:<MCU_ID>:<example> in decimal digits
+    (caos/net/inc/net_cfg.h). MCU from CAOS_MCU, else cpu.cmake (as prog.sh)."""
+    import re
+    mcu = os.environ.get("CAOS_MCU")
+    if not mcu:
+        with open(os.path.join(REPO, "cpu.cmake")) as f:
+            mcu = re.search(r'set\(CURR_MCU\s+"([A-Z0-9]+)"', f.read()).group(1)
+    mid = int(re.sub(r"\D", "", mcu))
+    d2 = lambda n: (n // 10 % 10) << 4 | (n % 10)
+    return "02:%02x:%02x:%02x:%02x:%02x" % (role, d2(mid // 100), d2(mid % 100),
+                                            d2(example // 100), d2(example % 100))
+
+
+BOARD_MAC = example_mac(87)
 LEASES = "/run/caos-bench/dnsmasq.leases"
 
 

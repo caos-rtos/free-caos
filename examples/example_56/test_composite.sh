@@ -30,7 +30,16 @@ set -uo pipefail
 IFACE=""; TTY=""; SKIP_MSC=0
 IP_LOCAL="192.168.10.1/24"
 IP_DEV="192.168.10.56"          # from ca_os_ex56.c
-MAC_DEV="02:ca:05:00:00:56"     # from ca_os_ex56.c
+# The example's MAC: 02:<role>:<MCU_ID>:<example> in decimal digits
+# (caos/net/inc/net_cfg.h). MCU from CAOS_MCU, else cpu.cmake (as prog.sh).
+example_mac() {   # example_mac <role hex> <example>
+    local mcu="${CAOS_MCU:-$(grep -oP 'set\(CURR_MCU "\K[A-Z0-9]+' "$(dirname "$0")/../../cpu.cmake")}"
+    local id=$((10#${mcu//[!0-9]/})) ex=$2
+    printf '02:%s:%d%d:%d%d:%d%d:%d%d' "$1" $((id/1000%10)) $((id/100%10)) $((id/10%10)) $((id%10)) \
+        $((ex/1000%10)) $((ex/100%10)) $((ex/10%10)) $((ex%10))
+}
+MAC_DEV="$(example_mac ca 56)"  # CA_EXAMPLE_MAC(56) in ca_os_ex56.c
+MAC_HOST="$(example_mac cc 56)" # CA_EXAMPLE_MAC_HOST(56): the PC side
 VID="ca01"
 N_PING=5
 
@@ -125,11 +134,11 @@ fi
 head_ "2) NCM: ARP + ICMP with the caOS stack"
 # =============================================================================
 if [[ -z "$IFACE" ]]; then
-    # The composite interface has the host-side MAC 02:ca:05:00:00:a6.
+    # The composite interface has the host-side MAC (CA_EXAMPLE_MAC_HOST).
     for n in /sys/class/net/*; do
         [[ -e "$n/address" ]] || continue
         a=$(cat "$n/address")
-        [[ "$a" == 02:ca:05:* ]] && IFACE=$(basename "$n") && break
+        [[ "${a,,}" == "${MAC_HOST,,}" ]] && IFACE=$(basename "$n") && break
     done
 fi
 if [[ -z "$IFACE" || ! -e "/sys/class/net/$IFACE" ]]; then

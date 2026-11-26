@@ -6,7 +6,7 @@ Usage:
     sudo python3 test_usb_loopback.py [--packets N] [--size B] [--ep COUNT]
 
 Device:
-    VID=0xCA01  PID=0x0001
+    VID=0xCA01  PID=0x0001 (example 50), 0x0101 with --pid (example 109, HS)
     EP1..EP8  IN=0x81..0x88  OUT=0x01..0x08  (bulk, 64B FS)
     The actual EP count is read from the device config descriptor
     (H563=up to 7 data, H7=6, U575=5).
@@ -25,6 +25,7 @@ import usb.core
 import usb.util
 import argparse
 import sys
+import os
 import random
 import time
 import threading
@@ -99,7 +100,7 @@ def ep_worker(dev, ep_idx, num_packets, pkt_size, result):
     def writer():
         try:
             for _ in range(num_packets):
-                data = bytes(random.randint(0, 255) for _ in range(pkt_size))
+                data = os.urandom(pkt_size)   # random.randint per byte cost ~0.3 ms/512 B: it capped HS at 1.5 MB/s
                 dev.write(ep_out, data, TIMEOUT)
                 corr_q.put(data)          # store for checking (blocks when full)
         except Exception as e:
@@ -212,7 +213,10 @@ def main():
     ap.add_argument("--size",    type=int, default=64)
     ap.add_argument("--ep",      type=int, default=0,
                     help=f"Number of EPs to test (1..{MAX_EP}, default: all those the device exposes)")
+    ap.add_argument("--pid",     type=lambda v: int(v, 0), default=PID,
+                    help="USB product ID (default 0x0001 = example 50; 0x0101 = example 109, high speed)")
     args = ap.parse_args()
+    globals()['PID'] = args.pid
 
     dev = find_device()
     dev_ep = count_device_ep_pairs(dev)

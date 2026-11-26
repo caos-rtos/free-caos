@@ -57,6 +57,14 @@ typedef void (*ca_usb_tx_done_cb_t)(u8 ep_addr);
 /* Release of a buffer given to ca_usb_ep_write_ref(): called once, from the
  * USB interrupt or from ep_close/reset, when the driver no longer reads it. */
 typedef void (*ca_usb_tx_release_cb_t)(u32 cookie);
+/* DIRECT RX (optional, NULL-safe): before reading an OUT data packet of len
+ * bytes out of its FIFO, a driver may ask where to put it. A non-NULL answer
+ * is 4-aligned with room for len rounded up to 4; the driver reads the packet
+ * there, skips its own queue, and calls rx_placed. NULL: the usual queue and
+ * on_rx. For a class that consumes OUT data inside the interrupt anyway (NCM),
+ * this saves the copy through the queue. Drivers without it never ask. */
+typedef u8  *(*ca_usb_rx_dest_cb_t)(u8 ep_addr, u16 len);
+typedef void (*ca_usb_rx_placed_cb_t)(u8 ep_addr, u16 len);
 
 typedef struct {
     ca_usb_reset_cb_t     on_reset;
@@ -65,6 +73,8 @@ typedef struct {
     ca_usb_setup_cb_t     on_setup;
     ca_usb_rx_cb_t        on_rx;
     ca_usb_tx_done_cb_t   on_tx_done;
+    ca_usb_rx_dest_cb_t   rx_dest;      /* optional: direct RX, see above */
+    ca_usb_rx_placed_cb_t rx_placed;
 } ca_usb_cb_t;
 
 /* ── Driver Ops-table (ISR excluded — drivers invoke the ISR directly) ── */
@@ -119,6 +129,10 @@ void ca_usb_set_address(u32 usb_num, u8 addr);
 
 /* Reads negotiated speed after ENUMDNE */
 ca_usb_speed_t ca_usb_get_speed(u32 usb_num);
+
+/* Bulk max packet size for the negotiated speed: 512 at high speed, 64 at
+ * full speed (USB 2.0 5.8.3). Valid after ENUMDNE (bus reset done). */
+u16 ca_usb_bulk_mps(u32 usb_num);
 
 /* ISR dispatcher — called by the HW IRQ handler */
 void ca_usb_isr(u32 usb_num);

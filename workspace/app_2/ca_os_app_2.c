@@ -195,16 +195,10 @@ static char parse_slot(const char *p)
     return 0;
 }
 
-static bool boot_cli(c_str *pcmd)
+/* boot — the line arrives without the command word */
+static bool boot_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("boot      : info | select A|B | go [A|B] | erase A|B | protect [on|off]  (bootloader)");
-        return false;
-    }
-    if (ca_strncmp(p, "boot", 4) != 0) return false;
-    p = ca_skip_sp(p + 4);
-
+    const char *p = (*args)->data;
     if (*p == '\0' || ca_strncmp(p, "info", 4) == 0) {
         boot_conf_t c;
         if (boot_conf_read(&c))
@@ -257,7 +251,13 @@ static bool boot_cli(c_str *pcmd)
     return true;
 }
 
-static ca_cli_node_t s_boot_node = { boot_cli, NULL };
+static const ca_cli_cmd_t s_boot_cmds[] = {
+    { "boot", "boot      : info | select A|B | go [A|B] | erase A|B | protect [on|off]  (bootloader)", { boot_cmd, STACK_LARGE } },
+};
+
+static ca_cli_table_t s_boot_table = {
+    "boot", s_boot_cmds, (u16)(sizeof(s_boot_cmds) / sizeof(s_boot_cmds[0])), NULL
+};
 
 /* =============================================================================
  * Network (recovery): DHCP, ARP, TFTP server for the update
@@ -591,7 +591,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_boot_node);
+        ca_cli_register_table(&s_boot_table);
     )
     ca_flash_init();
 

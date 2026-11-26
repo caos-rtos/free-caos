@@ -438,111 +438,119 @@ static bool wire_test_one(cstr name,
     return ok;
 }
 
-static bool user_cli_handler(c_str *pcmd)
+/* one entry per command word; each gets the line without its word */
+static bool info_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("ex29      : wire (test the 3 jumpers) | starve | info");
-        return false;
-    }
-    if (ca_strncmp(p, "info", 4) == 0) {
-        CLI_PUT_N("--- Example 29: SPI1 master <-> SPI3 slave, same MCU ---");
-        CLI_PUT_N("  " WIRE_TXT_1);
-        CLI_PUT_N("  " WIRE_TXT_2);
-        CLI_PUT_N("  " WIRE_TXT_3);
-        CLI_PUT_N("  led   LED 1 (pin from objmap.h)");
-        return true;
-    }
-    if (ca_strncmp(p, "starve", 6) == 0) {
-        /* The slave waiting for a master that never clocks - no jumpers, or
-         * the master parked as here: each byte must give up after
-         * CA_SPI_XFER_TIMEOUT_MS instead of holding the task for good, and
-         * the slave must still work for the next call. No wiring needed. */
-        g_spi_parked = true;
-        ca_os_sleep(1200);                 /* the master ends its cycle */
-        u8 buf[2];
-        for (u32 k = 1U; k <= 2U; k++) {
-            const u32 t0  = ca_os_tick_ms();
-            const u16 got = ca_spi_read_buf(SLAVE_SPI, buf, sizeof(buf));
-            CLI_PRINTF_N("EX29 STARVE: try %u - slave got %u/%u bytes in %u ms "
-                         "(limit %u ms per byte)", k, (u32)got, (u32)sizeof(buf),
-                         ca_os_tick_ms() - t0, (u32)CA_SPI_XFER_TIMEOUT_MS);
-        }
-        g_spi_parked = false;
-        return true;
-    }
-    if (ca_strncmp(p, "wire", 4) == 0) {
-        CLI_PUT_N("--- EX29 wire: continuity of the 3 jumpers ---");
-        CLI_PUT_N("  master pin driven, slave pin read (pulldown)");
-
-        /* Park both peripherals: the slave's RX interrupt would otherwise fire
-         * on the edges this test generates. Report a failure here rather than
-         * letting it look like missing jumpers - if the peripheral does not
-         * stop, the pins never leave alternate function and every line below
-         * reads 0, which is exactly what a disconnected wire looks like. */
-        /* Park the TASKS first, then the peripherals. Stopping only the
-         * peripheral is not enough and was the second half of this bug: the
-         * master task kept running, ca_spi_hw_xfer() found SPE=0, re-enabled
-         * the SPI (its mode-fault recovery path) and took the pins straight
-         * back from the GPIO test - the console showed "frame 13 TX OK"
-         * arriving after the wire command had started.
-         * The sleep covers the task's own 500-1000 ms cycle: it has to reach
-         * the top of its loop and see the flag before we touch the pins. */
-        g_spi_parked = true;
-        CLI_PUT_N("  parking SPI tasks...");
-        ca_os_sleep(1200);
-
-        bool m_ok = ca_spi_stop(MASTER_SPI);
-        bool s_ok = true;
-#ifndef EN_SPI_LOOPBACK
-        s_ok = ca_spi_stop(SLAVE_SPI);
-#endif
-        if (!m_ok || !s_ok)
-            CLI_PRINTF_N("  WARNING: spi_stop master=%u slave=%u - results below unreliable",
-                         (u32)m_ok, (u32)s_ok);
-        /* ca_gpio_configure() does not enable the port clock — ca_gpio_init_port()
-         * does, and the SPI driver only set up its own pins. Without this the
-         * writes land nowhere and a good jumper reads as missing (the trap that
-         * cost time in ex27). */
-        ca_gpio_init_port(CA_GPIO_PORT_A);
-        ca_gpio_init_port(CA_GPIO_PORT_B);
-        ca_gpio_init_port(CA_GPIO_PORT_C);
-
-        u32 bad = 0;
-        /* Each line is driven from the end that drives it in normal operation:
-         * master -> slave for SCK and MOSI, slave -> master for MISO.
-         *
-         * The wire itself is symmetric, so it is tempting to drive one fixed
-         * side for all three - that is what this did until 2026-08-28, and it
-         * reported MISO as FAIL (drive1->read0) on a board whose three jumpers
-         * were all present and passing 128-byte frames. Driving the master's
-         * MISO pad means driving a pin the SPI holds as an input, against the
-         * slave's MISO pad, which the enabled peripheral holds as an output:
-         * two drivers on one net, and the reading says nothing about the wire.
-         * Continuity is symmetric; the pads at its ends are not. */
-        if (!wire_test_one(WIRE_TXT_1, SCK_PORT,  SCK_PIN,  S_SCK_PORT,  S_SCK_PIN))  bad++;
-        if (!wire_test_one(WIRE_TXT_2, MOSI_PORT, MOSI_PIN, S_MOSI_PORT, S_MOSI_PIN)) bad++;
-        if (!wire_test_one(WIRE_TXT_3, S_MISO_PORT, S_MISO_PIN, MISO_PORT, MISO_PIN)) bad++;
-
-        CLI_PUT_N("  ----------------------------------------------");
-        /* One line the bench can read, identical in every example that has a
-         * `wire` command - see the note in ex64. The wording below said
-         * "RESULT: PASS/ERROR" and counted the BAD ones, which is the opposite
-         * convention from the others; the fixed line counts the good. */
-        CLI_PRINTF_N("  WIRE RESULT : %s  (%u/3)",
-                     (bad == 0U) ? "OK" : "FAIL", (u32)(3U - bad));
-        if (bad != 0U)
-            CLI_PRINTF_N("  (%u of 3 missing or wrong)", bad);
-
-        CLI_PUT_N("  pins are plain GPIO now - rebooting in 2.5 s...");
-        ca_os_sleep(2500);
-        ca_os_reset();
-        return true;
-    }
-    return false;
+    (void)args;
+    CLI_PUT_N("--- Example 29: SPI1 master <-> SPI3 slave, same MCU ---");
+    CLI_PUT_N("  " WIRE_TXT_1);
+    CLI_PUT_N("  " WIRE_TXT_2);
+    CLI_PUT_N("  " WIRE_TXT_3);
+    CLI_PUT_N("  led   LED 1 (pin from objmap.h)");
+    return true;
 }
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
+
+static bool starve_cmd(c_str *args)
+{
+    (void)args;
+    /* The slave waiting for a master that never clocks - no jumpers, or
+     * the master parked as here: each byte must give up after
+     * CA_SPI_XFER_TIMEOUT_MS instead of holding the task for good, and
+     * the slave must still work for the next call. No wiring needed. */
+    g_spi_parked = true;
+    ca_os_sleep(1200);                 /* the master ends its cycle */
+    u8 buf[2];
+    for (u32 k = 1U; k <= 2U; k++) {
+        const u32 t0  = ca_os_tick_ms();
+        const u16 got = ca_spi_read_buf(SLAVE_SPI, buf, sizeof(buf));
+        CLI_PRINTF_N("EX29 STARVE: try %u - slave got %u/%u bytes in %u ms "
+                     "(limit %u ms per byte)", k, (u32)got, (u32)sizeof(buf),
+                     ca_os_tick_ms() - t0, (u32)CA_SPI_XFER_TIMEOUT_MS);
+    }
+    g_spi_parked = false;
+    return true;
+}
+
+static bool wire_cmd(c_str *args)
+{
+    (void)args;
+    CLI_PUT_N("--- EX29 wire: continuity of the 3 jumpers ---");
+    CLI_PUT_N("  master pin driven, slave pin read (pulldown)");
+
+    /* Park both peripherals: the slave's RX interrupt would otherwise fire
+     * on the edges this test generates. Report a failure here rather than
+     * letting it look like missing jumpers - if the peripheral does not
+     * stop, the pins never leave alternate function and every line below
+     * reads 0, which is exactly what a disconnected wire looks like. */
+    /* Park the TASKS first, then the peripherals. Stopping only the
+     * peripheral is not enough and was the second half of this bug: the
+     * master task kept running, ca_spi_hw_xfer() found SPE=0, re-enabled
+     * the SPI (its mode-fault recovery path) and took the pins straight
+     * back from the GPIO test - the console showed "frame 13 TX OK"
+     * arriving after the wire command had started.
+     * The sleep covers the task's own 500-1000 ms cycle: it has to reach
+     * the top of its loop and see the flag before we touch the pins. */
+    g_spi_parked = true;
+    CLI_PUT_N("  parking SPI tasks...");
+    ca_os_sleep(1200);
+
+    bool m_ok = ca_spi_stop(MASTER_SPI);
+    bool s_ok = true;
+#ifndef EN_SPI_LOOPBACK
+    s_ok = ca_spi_stop(SLAVE_SPI);
+#endif
+    if (!m_ok || !s_ok)
+        CLI_PRINTF_N("  WARNING: spi_stop master=%u slave=%u - results below unreliable",
+                     (u32)m_ok, (u32)s_ok);
+    /* ca_gpio_configure() does not enable the port clock — ca_gpio_init_port()
+     * does, and the SPI driver only set up its own pins. Without this the
+     * writes land nowhere and a good jumper reads as missing (the trap that
+     * cost time in ex27). */
+    ca_gpio_init_port(CA_GPIO_PORT_A);
+    ca_gpio_init_port(CA_GPIO_PORT_B);
+    ca_gpio_init_port(CA_GPIO_PORT_C);
+
+    u32 bad = 0;
+    /* Each line is driven from the end that drives it in normal operation:
+     * master -> slave for SCK and MOSI, slave -> master for MISO.
+     *
+     * The wire itself is symmetric, so it is tempting to drive one fixed
+     * side for all three - that is what this did until 2026-08-28, and it
+     * reported MISO as FAIL (drive1->read0) on a board whose three jumpers
+     * were all present and passing 128-byte frames. Driving the master's
+     * MISO pad means driving a pin the SPI holds as an input, against the
+     * slave's MISO pad, which the enabled peripheral holds as an output:
+     * two drivers on one net, and the reading says nothing about the wire.
+     * Continuity is symmetric; the pads at its ends are not. */
+    if (!wire_test_one(WIRE_TXT_1, SCK_PORT,  SCK_PIN,  S_SCK_PORT,  S_SCK_PIN))  bad++;
+    if (!wire_test_one(WIRE_TXT_2, MOSI_PORT, MOSI_PIN, S_MOSI_PORT, S_MOSI_PIN)) bad++;
+    if (!wire_test_one(WIRE_TXT_3, S_MISO_PORT, S_MISO_PIN, MISO_PORT, MISO_PIN)) bad++;
+
+    CLI_PUT_N("  ----------------------------------------------");
+    /* One line the bench can read, identical in every example that has a
+     * `wire` command - see the note in ex64. The wording below said
+     * "RESULT: PASS/ERROR" and counted the BAD ones, which is the opposite
+     * convention from the others; the fixed line counts the good. */
+    CLI_PRINTF_N("  WIRE RESULT : %s  (%u/3)",
+                 (bad == 0U) ? "OK" : "FAIL", (u32)(3U - bad));
+    if (bad != 0U)
+        CLI_PRINTF_N("  (%u of 3 missing or wrong)", bad);
+
+    CLI_PUT_N("  pins are plain GPIO now - rebooting in 2.5 s...");
+    ca_os_sleep(2500);
+    ca_os_reset();
+    return true;
+}
+
+static const ca_cli_cmd_t s_user_cmds[] = {
+    { "info", "info      : wiring and SPI configuration", { info_cmd, STACK_MEDIUM } },
+    { "starve", "starve    : slave without clock: every byte must time out", { starve_cmd, STACK_MEDIUM } },
+    { "wire", "wire      : continuity test of the 3 jumpers", { wire_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_user_table = {
+    "user", s_user_cmds, (u16)(sizeof(s_user_cmds) / sizeof(s_user_cmds[0])), NULL
+};
 
 #endif /* ENABLE_CLI */
 
@@ -606,7 +614,7 @@ void ca_os_configure(void)
 
 void ca_os_main(void)
 {
-    EVAL_CLI( ca_cli_register(&s_user_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_user_table); )
 
     /* Always on, SPI or not: it is the proof that plain GPIO works. */
     ca_os_job("beat", CA_TH_LEVEL3, task_heartbeat, NULL,

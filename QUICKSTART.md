@@ -189,8 +189,8 @@ tools/lookup_qa.py --type error ca_uart_put   # one kind: usage code parameters 
 
 The data is `tools/db/reference.json` (the reference chapter of the manual) and
 `tools/db/caos_qa.jsonl` (Q&A generated with the help of an AI from that reference). When a
-detail matters, the declaration in `include/` is the authority. Some entries document the
-full edition (CAN, USB HS, TAMP, FMAC): if a name is not declared in `include/`, this
+detail matters, the declaration in `include/` is the authority. Some entries document CAN, USB HS
+and MicroPython, which the FREE configuration leaves off: if a name is not declared in `include/`, this
 edition does not have it.
 
 ## 6. Debugging without a debugger

@@ -96,12 +96,10 @@ static void bks_bounds(void)
 }
 
 #if ENABLE_CLI
-static bool ex101_cli(c_str *pcmd)
+/* bks — the line arrives without the command word */
+static bool bks_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) { CLI_PUT_N("bks: info | fill <seed> | check <seed> | bounds"); return false; }
-    if (ca_strncmp(p, "bks", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
+    const char *p = (*args)->data;
     if (ca_bkp_sram_size() == 0U) { CLI_PUT_N("BKS: no backup SRAM on this part"); return true; }
     if (ca_strncmp(p, "info", 4) == 0) {
         CLI_PRINTF_N("BKS size %u bytes, retention in Standby/VBAT: %s", ca_bkp_sram_size(),
@@ -113,11 +111,17 @@ static bool ex101_cli(c_str *pcmd)
     } else if (ca_strncmp(p, "bounds", 6) == 0) {
         bks_bounds();
     } else {
-        CLI_PUT_N("bks: info | fill <seed> | check <seed> | bounds");
+        return false;                   /* cli prints the help line */
     }
     return true;
 }
-static ca_cli_node_t s_cli = { ex101_cli, NULL };
+static const ca_cli_cmd_t s_bks_cmds[] = {
+    { "bks", "bks       : info | fill <seed> | check <seed> | bounds", { bks_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_bks_table = {
+    "bks", s_bks_cmds, (u16)(sizeof(s_bks_cmds) / sizeof(s_bks_cmds[0])), NULL
+};
 #endif
 
 PRIVATE_STRING(why, "ex101: no backup SRAM on this part");
@@ -140,7 +144,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_cli);
+        ca_cli_register_table(&s_bks_table);
     )
 }
 

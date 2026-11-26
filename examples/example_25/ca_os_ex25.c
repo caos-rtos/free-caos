@@ -377,105 +377,111 @@ static u32 task_monitor(void *arg)
 }
 
 /* ============================================================================
- * CLI — chain of responsibility
+ * CLI — command table
  * ========================================================================== */
 
-static bool user_cli_handler(c_str *pcmd)
+/* one entry per command word; each gets the line without its word */
+static bool wire_cmd(c_str *args)
 {
-    c_str cmd = *pcmd;
-    const char *p = ca_skip_sp(cmd->data);
+    (void)args;
+    /* Continuity test of the two jumpers, on plain GPIO: no timer, no
+     * encoder, so a FAIL here means the wire, not the configuration.
+     * TIM3 must be STOPPED first - its ISR drives these very pins 10000
+     * times a second and would overwrite every level before the read.
+     * The encoder timer goes too: it owns the input pins as AF. */
+    ca_timer_stop(TIM_GEN);
+    ca_timer_stop(TIM_ENC);
 
-    if (ca_strncmp(p, "help", 4) == 0) {
-        /* One line listing the bare commands, like the other examples that
-         * register theirs bare (ex21 "hello | status | show | wire", ex22,
-         * ex24). Four descriptive lines said the same thing in a shape of
-         * their own; ex64 keeps its "s64: ..." prefix because there the
-         * prefix is real - it dispatches on strncmp(p, "s64", 3). */
-        CLI_PUT_N("setcw | setccw | show | wire");
-        return false;
+    static const struct { ca_gpio_port_t op; ca_gpio_pin_t opin;
+                          ca_gpio_port_t ip; ca_gpio_pin_t ipin; const char *name; }
+    L[] = {
+        { TIM_QUAD_A_PORT, TIM_QUAD_A_PIN, TIM_ENC_A_PORT, TIM_ENC_A_PIN,
+          WIRE_A_TXT },
+        { TIM_QUAD_B_PORT, TIM_QUAD_B_PIN, TIM_ENC_B_PORT, TIM_ENC_B_PIN,
+          WIRE_B_TXT },
+    };
+    u32 good = 0U;
+    for (u32 i = 0; i < 2U; i++) {
+        ca_gpio_configure(L[i].op, L[i].opin, CA_GPIO_MODE_OUTPUT,
+                          CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
+        ca_gpio_configure(L[i].ip, L[i].ipin, CA_GPIO_MODE_INPUT,
+                          CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
+        ca_gpio_write(L[i].op, L[i].opin, 0);
+        for (volatile u32 d = 0; d < 20000U; d++) { }
+        u8 lo = ca_gpio_read(L[i].ip, L[i].ipin);
+        ca_gpio_write(L[i].op, L[i].opin, 1);
+        for (volatile u32 d = 0; d < 20000U; d++) { }
+        u8 hi = ca_gpio_read(L[i].ip, L[i].ipin);
+        CLI_PRINTF_N("  %s : drive0->read%u  drive1->read%u  %s",
+                     L[i].name, lo, hi,
+                     (lo == 0 && hi == 1) ? "OK (wire present)"
+                                          : "FAIL (wire missing or swapped)");
+        if (lo == 0 && hi == 1) good++;
     }
-    if (ca_strncmp(p, "wire", 4) == 0) {
-        /* Continuity test of the two jumpers, on plain GPIO: no timer, no
-         * encoder, so a FAIL here means the wire, not the configuration.
-         * TIM3 must be STOPPED first - its ISR drives these very pins 10000
-         * times a second and would overwrite every level before the read.
-         * The encoder timer goes too: it owns the input pins as AF. */
-        ca_timer_stop(TIM_GEN);
-        ca_timer_stop(TIM_ENC);
-
-        static const struct { ca_gpio_port_t op; ca_gpio_pin_t opin;
-                              ca_gpio_port_t ip; ca_gpio_pin_t ipin; const char *name; }
-        L[] = {
-            { TIM_QUAD_A_PORT, TIM_QUAD_A_PIN, TIM_ENC_A_PORT, TIM_ENC_A_PIN,
-              WIRE_A_TXT },
-            { TIM_QUAD_B_PORT, TIM_QUAD_B_PIN, TIM_ENC_B_PORT, TIM_ENC_B_PIN,
-              WIRE_B_TXT },
-        };
-        u32 good = 0U;
-        for (u32 i = 0; i < 2U; i++) {
-            ca_gpio_configure(L[i].op, L[i].opin, CA_GPIO_MODE_OUTPUT,
-                              CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
-            ca_gpio_configure(L[i].ip, L[i].ipin, CA_GPIO_MODE_INPUT,
-                              CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
-            ca_gpio_write(L[i].op, L[i].opin, 0);
-            for (volatile u32 d = 0; d < 20000U; d++) { }
-            u8 lo = ca_gpio_read(L[i].ip, L[i].ipin);
-            ca_gpio_write(L[i].op, L[i].opin, 1);
-            for (volatile u32 d = 0; d < 20000U; d++) { }
-            u8 hi = ca_gpio_read(L[i].ip, L[i].ipin);
-            CLI_PRINTF_N("  %s : drive0->read%u  drive1->read%u  %s",
-                         L[i].name, lo, hi,
-                         (lo == 0 && hi == 1) ? "OK (wire present)"
-                                              : "FAIL (wire missing or swapped)");
-            if (lo == 0 && hi == 1) good++;
-        }
-        /* One line the bench can read, identical in every example that has a
-         * `wire` command - see the note in ex64. */
-        CLI_PRINTF_N("  WIRE RESULT : %s  (%u/2)",
-                     (good == 2U) ? "OK" : "FAIL", good);
-        /* The pins are plain GPIO now, not timer AF: reboot to put the
-         * generator and the encoder back the way ca_os_configure() set them. */
-        CLI_PUT_N("  rebooting in 2.5 s to restore the timers...");
-        ca_os_sleep(2500);
-        ca_os_reset();
-        return true;
-    }
-    if (ca_strncmp(p, "setcw", 5) == 0 && (p[5] == '\0' || p[5] == ' ')) {
-        g_req_cw = 1;
-        CLI_PUT_N("direction: CW");
-        return true;
-    }
-    if (ca_strncmp(p, "setccw", 6) == 0 && (p[6] == '\0' || p[6] == ' ')) {
-        g_req_cw = 0;
-        CLI_PUT_N("direction: CCW");
-        return true;
-    }
-    if (ca_strncmp(p, "show", 4) == 0 && (p[4] == '\0' || p[4] == ' ')) {
-        ca_timer_encoder_read(TIM_ENC);
-        i32 pos      = (i32)encoder_pos_accum;
-        u32 tim3_cnt = g_tim3_irq_count;
-        u32 quad_cnt = g_quad_cycles;
-        u8  dir      = g_req_cw;
-        u32 cw_cnt   = g_cw_cycles;
-        u32 ccw_cnt  = g_ccw_cycles;
-        i32 expected = dir ? (i32)quad_cnt : -(i32)quad_cnt;
-
-        CLI_PUT_N("=== QUADRATURE ENCODER STATUS ===");
-        CLI_PUT_N("  wiring    : " WIRE_A_TXT);
-        CLI_PUT_N("              " WIRE_B_TXT);
-        CLI_PRINTF_N("  pos       : %d", pos);
-        CLI_PRINTF_N("  dir       : %s", dir ? "CW" : "CCW");
-        CLI_PRINTF_N("  tim3_irq  : %u", tim3_cnt);
-        CLI_PRINTF_N("  quad_cyc  : %u", quad_cnt);
-        CLI_PRINTF_N("  cw_cyc    : %u", cw_cnt);
-        CLI_PRINTF_N("  ccw_cyc   : %u", ccw_cnt);
-        CLI_PRINTF_N("  expected  : %d", expected);
-        return true;
-    }
-    return false;
+    /* One line the bench can read, identical in every example that has a
+     * `wire` command - see the note in ex64. */
+    CLI_PRINTF_N("  WIRE RESULT : %s  (%u/2)",
+                 (good == 2U) ? "OK" : "FAIL", good);
+    /* The pins are plain GPIO now, not timer AF: reboot to put the
+     * generator and the encoder back the way ca_os_configure() set them. */
+    CLI_PUT_N("  rebooting in 2.5 s to restore the timers...");
+    ca_os_sleep(2500);
+    ca_os_reset();
+    return true;
 }
 
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
+static bool setcw_cmd(c_str *args)
+{
+    (void)args;
+    g_req_cw = 1;
+    CLI_PUT_N("direction: CW");
+    return true;
+}
+
+static bool setccw_cmd(c_str *args)
+{
+    (void)args;
+    g_req_cw = 0;
+    CLI_PUT_N("direction: CCW");
+    return true;
+}
+
+static bool show_cmd(c_str *args)
+{
+    (void)args;
+    ca_timer_encoder_read(TIM_ENC);
+    i32 pos      = (i32)encoder_pos_accum;
+    u32 tim3_cnt = g_tim3_irq_count;
+    u32 quad_cnt = g_quad_cycles;
+    u8  dir      = g_req_cw;
+    u32 cw_cnt   = g_cw_cycles;
+    u32 ccw_cnt  = g_ccw_cycles;
+    i32 expected = dir ? (i32)quad_cnt : -(i32)quad_cnt;
+
+    CLI_PUT_N("=== QUADRATURE ENCODER STATUS ===");
+    CLI_PUT_N("  wiring    : " WIRE_A_TXT);
+    CLI_PUT_N("              " WIRE_B_TXT);
+    CLI_PRINTF_N("  pos       : %d", pos);
+    CLI_PRINTF_N("  dir       : %s", dir ? "CW" : "CCW");
+    CLI_PRINTF_N("  tim3_irq  : %u", tim3_cnt);
+    CLI_PRINTF_N("  quad_cyc  : %u", quad_cnt);
+    CLI_PRINTF_N("  cw_cyc    : %u", cw_cnt);
+    CLI_PRINTF_N("  ccw_cyc   : %u", ccw_cnt);
+    CLI_PRINTF_N("  expected  : %d", expected);
+    return true;
+}
+
+static const ca_cli_cmd_t s_user_cmds[] = {
+    { "wire", "wire      : continuity test of the two jumpers", { wire_cmd, STACK_MEDIUM } },
+    { "setcw", "setcw     : encoder direction clockwise", { setcw_cmd, STACK_MEDIUM } },
+    { "setccw", "setccw    : encoder direction counter-clockwise", { setccw_cmd, STACK_MEDIUM } },
+    { "show", "show      : encoder position, TIM3 counters", { show_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_user_table = {
+    "user", s_user_cmds, (u16)(sizeof(s_user_cmds) / sizeof(s_user_cmds[0])), NULL
+};
+
 
 /* ============================================================================
  * ENTRY POINTS
@@ -563,7 +569,7 @@ void ca_os_main(void)
 {
     ca_timer_init();
     ca_os_job("monitor", CA_TH_LEVEL3, task_monitor, NULL, STACK_SMALL, CA_JOB_STD, CA_FAULT_RESTART_THREAD);
-    EVAL_CLI( ca_cli_register(&s_user_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_user_table); )
     ca_os_run(true);
 }
 

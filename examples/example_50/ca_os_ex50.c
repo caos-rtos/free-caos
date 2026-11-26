@@ -375,18 +375,10 @@ static void handle_status(void)
 
 #if ENABLE_CLI
 
-static bool usb_cli_handler(c_str *pcmd)
+/* usb — the line arrives without the command word */
+static bool usb_cmd(c_str *args)
 {
-    c_str cmd = *pcmd;
-    const char *p = ca_skip_sp(cmd->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("usb: status | halt | resume | ep");
-        return false;
-    }
-    if (ca_strncmp(p, "usb", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
-
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "status", 6) == 0) {
         static const char *const sname[] = {
             "IDLE", "ATTACHED", "ADDRESSED", "CONFIGURED", "HALTED"
@@ -556,7 +548,13 @@ static bool usb_cli_handler(c_str *pcmd)
     return true;
 }
 
-static ca_cli_node_t s_usb_cli = { usb_cli_handler, NULL };
+static const ca_cli_cmd_t s_usb_cmds[] = {
+    { "usb", "usb       : status | halt | resume | ep", { usb_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_usb_table = {
+    "usb", s_usb_cmds, (u16)(sizeof(s_usb_cmds) / sizeof(s_usb_cmds[0])), NULL
+};
 
 #endif /* ENABLE_CLI */
 
@@ -640,7 +638,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_usb_cli);
+        ca_cli_register_table(&s_usb_table);
     )
 }
 
@@ -651,13 +649,16 @@ void ca_os_main(void)
                                STACK_MEDIUM, CA_JOB_STD, CA_FAULT_RESTART_THREAD);
     if (s_ctrl_task != CA_TASK_HANDLE_NONE) {
         /* A loopback task for bulk EP (EP1..NUM_DATA_EP), equal priority
-           → fair round-robin. The IDs are used by on_rx to route the notify. */
+           → fair round-robin. The IDs are used by on_rx to route the notify.
+           STACK_SMALL: the loop tasks only move packets (no printf). With
+           MEDIUM, 6 loops + usb + hb filled the 48 KB PSP arena of the H773
+           and the CLI built-ins failed ('cli_cmd' needs STACK_LARGE). */
         for (u32 e = 1U; e <= NUM_DATA_EP; e++) {
             s_loop_task[e] = ca_os_job(s_loop_names[e], CA_TH_LEVEL5, task_loop, (void *)(uintptr_t)e,
-                                          STACK_MEDIUM, CA_JOB_STD, CA_FAULT_RESTART_THREAD);
+                                          STACK_SMALL, CA_JOB_STD, CA_FAULT_RESTART_THREAD);
         }
         ca_os_job("hb", CA_TH_LEVEL4, task_hb, NULL,
-                  STACK_MEDIUM, CA_JOB_STD, CA_FAULT_RESTART_THREAD);
+                  STACK_SMALL, CA_JOB_STD, CA_FAULT_RESTART_THREAD);
     }
 
     ca_os_run(true);

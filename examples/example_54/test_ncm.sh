@@ -9,7 +9,7 @@
 #
 # Usage:
 #   sudo ./test_ncm.sh                # default usb0
-#   sudo ./test_ncm.sh enx02ca05000001
+#   sudo ./test_ncm.sh enx02cc<MCU_ID>0054   (the PC side, CA_EXAMPLE_MAC_HOST(54))
 #
 # Needs: sudo (ip, tcpdump), iproute2, tcpdump.
 

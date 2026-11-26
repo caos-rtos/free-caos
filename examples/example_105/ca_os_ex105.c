@@ -548,18 +548,10 @@ static void ex105_bench(void)
 /* ------------------------------------------------------------------- CLI */
 
 #if ENABLE_CLI
-static void ex105_usage(void)
+/* d2d — the line arrives without the command word */
+static bool d2d_cmd(c_str *args)
 {
-    CLI_PUT_N("d2d       : test <fill|copy|pfc|alpha|blend|edge|ctrl> | all | bench | probe <hex addr>");
-}
-
-static bool ex105_cli(c_str *pcmd)
-{
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) { ex105_usage(); return false; }
-    if (ca_strncmp(p, "d2d", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
-
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "all", 3) == 0)   { ex105_all(); return true; }
     if (ca_strncmp(p, "bench", 5) == 0) { ex105_bench(); return true; }
     if (ca_strncmp(p, "probe", 5) == 0) {
@@ -581,10 +573,15 @@ static bool ex105_cli(c_str *pcmd)
             if (ca_strncmp(p, s_groups[i].name, n) == 0) { (void)run_group(&s_groups[i]); return true; }
         }
     }
-    ex105_usage();
-    return true;
+    return false;                   /* cli prints the help line */
 }
-static ca_cli_node_t s_cli = { ex105_cli, NULL };
+static const ca_cli_cmd_t s_d2d_cmds[] = {
+    { "d2d", "d2d       : test <fill|copy|pfc|alpha|blend|edge|ctrl> | all | bench | probe <hex addr>", { d2d_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_d2d_table = {
+    "d2d", s_d2d_cmds, (u16)(sizeof(s_d2d_cmds) / sizeof(s_d2d_cmds[0])), NULL
+};
 #endif
 
 PRIVATE_STRING(why, "ex105: this part has no DMA2D (F767, H753 and U575 have it)");
@@ -608,7 +605,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_cli);
+        ca_cli_register_table(&s_d2d_table);
     )
 }
 

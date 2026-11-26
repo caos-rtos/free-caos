@@ -1068,6 +1068,53 @@ static bool case_tmr_period(const char *name) {
     return ok;
 }
 
+/* A timer belongs to the task that creates it (task_reaper). The actor makes
+ * three 10 ms periodics: #0 running, #1 stopped, #2 running and detached, then
+ * ends. After it: #0 never calls back again, #2 keeps firing, and #1 (stopped,
+ * so it never expires) is taken back by create - all the other slots fit. */
+static u32 task_tmr_owner(void *arg) {
+    const u32 slot = (u32)(uintptr_t)arg;
+    if (tmr_make(3U, 10U, CA_TIMER_PERIODIC)) {
+        (void)ca_sw_timer_start(s_tmr[0]);
+        (void)ca_sw_timer_start(s_tmr[2]);
+        (void)ca_sw_timer_detach(s_tmr[2]);
+        ca_os_sleep(35U);                   /* they work while it lives */
+    }
+    done_set(slot);
+    return 0;
+}
+
+static bool case_tmr_owner(const char *name) {
+    case_reset();
+    tmr_reset_all();
+    const bool made = spawn_fn(0, task_tmr_owner);
+    const bool out = finish(1U);
+    ca_os_sleep(E91_SETTLE_MS);             /* the actor has really ended */
+    const u32 h0 = s_tmr_hits[0], h2 = s_tmr_hits[2];
+    ca_os_sleep(50U);
+    const u32 d0 = s_tmr_hits[0] - h0, d2 = s_tmr_hits[2] - h2;
+    const bool gone = ca_sw_timer_get_state(s_tmr[0]) == CA_TIMER_STOPPED;
+
+    /* every slot but the detached one must be free again */
+    ca_sw_timer_handle_t more[CA_TIMER_MAX];
+    u32 got = 0U;
+    for (u32 i = 0U; i < CA_TIMER_MAX; i++) {
+        more[i] = ca_sw_timer_create(1000U, CA_TIMER_ONE_SHOT, tmr_cb, NULL);
+        if (more[i] != CA_TIMER_INVALID) got++;
+    }
+    for (u32 i = 0U; i < CA_TIMER_MAX; i++) {
+        if (more[i] != CA_TIMER_INVALID) (void)ca_sw_timer_delete(more[i]);
+    }
+    s_tmr[0] = s_tmr[1] = CA_TIMER_INVALID; /* their slots were reused above */
+    tmr_free(3U);                           /* the detached one */
+
+    const bool ok = made && out && h0 > 0U && d0 == 0U && gone && d2 >= 4U &&
+                    got == CA_TIMER_MAX - 1U;
+    SAY(name, ok, "creator ended: own timer %u calls after (want 0, had %u), detached %u (want >=4), "
+        "free slots %u (want %u)%s", d0, h0, d2, got, CA_TIMER_MAX - 1U, out ? "" : " STUCK");
+    return ok;
+}
+
 /* ---- FPU context shared by preempted tasks -------------------------------- */
 
 #if (__FPU_PRESENT == 1) && (__FPU_USED == 1)
@@ -1271,6 +1318,7 @@ static const e91_case_t s_cases[] = {
     { "tmr_rearm",  case_tmr_rearm_in_cb, "timer: one-shot re-armed from its own callback" },
     { "tmr_same",   case_tmr_same_tick,   "timer: 8 armed together all fire" },
     { "tmr_period", case_tmr_period,      "timer: set_period applies from the next cycle" },
+    { "tmr_owner",  case_tmr_owner,       "timer: dropped when its creator ends, detach keeps it" },
     { "stk_arena",  case_stack_arena,     "stack arena: freed stacks merge, a big one fits again" },
 #if (__FPU_PRESENT == 1) && (__FPU_USED == 1)
     { "fpu_share",  case_fpu_share,       "FPU: preempted FP tasks keep their registers" },
@@ -1319,15 +1367,9 @@ static void cmd_start(const char *p) {
                  pass, runs);
 }
 
-static bool user_cli_handler(c_str *pcmd) {
-    const char *p = ca_skip_sp((*pcmd)->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("e91       : start [case|all] | list");
-        return false;
-    }
-    if (ca_strncmp(p, "e91", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
+/* e91 — the line arrives without the command word */
+static bool e91_cmd(c_str *args) {
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "start", 5) == 0) {
         cmd_start(p + 5);
         return true;
@@ -1336,10 +1378,15 @@ static bool user_cli_handler(c_str *pcmd) {
         cmd_list();
         return true;
     }
-    CLI_PUT_N("e91       : start [case|all] | list");
-    return true;
+    return false;                   /* cli prints the help line */
 }
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
+static const ca_cli_cmd_t s_e91_cmds[] = {
+    { "e91", "e91       : start [case|all] | list", { e91_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_e91_table = {
+    "e91", s_e91_cmds, (u16)(sizeof(s_e91_cmds) / sizeof(s_e91_cmds[0])), NULL
+};
 
 static u32 task_main(void *arg) {
     (void)arg;
@@ -1363,7 +1410,7 @@ void ca_os_configure(void) {
 void ca_os_main(void) {
     ca_os_job("example_91", CA_TH_LEVEL3, task_main, NULL, STACK_SMALL, CA_JOB_STD,
               CA_FAULT_ASSERT);
-    ca_cli_register(&s_user_cli_node);
+    ca_cli_register_table(&s_e91_table);
     ca_os_run(true);
 }
 

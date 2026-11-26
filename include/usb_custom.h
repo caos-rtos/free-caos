@@ -38,7 +38,7 @@
 typedef struct {
     ca_usb_device_type_t header;       /* tag + ops (D19) */
     u8   ep_data;                       /* data EP number (1..N), IN+OUT bulk */
-    u16  mps;                           /* bulk MPS (64 FS, 512 HS) */
+    u16  mps;                           /* bulk MPS (64 FS, 512 HS); 0 = per speed (ca_usb_bulk_mps) */
     void (*on_rx)     (u8 ep_addr, u16 len);
     void (*on_tx_done)(u8 ep_addr);
     void (*on_mounted)(void);           /* opt.: host has enumerated the device */

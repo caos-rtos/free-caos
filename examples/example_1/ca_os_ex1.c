@@ -35,6 +35,6 @@ void ca_os_main(void) {
         char buffer[128];
         ca_printf(STDOUT, buffer, sizeof(buffer),
                   "Hello from CAOS ! E=%08X V=%04x T=%02x\r\n", E, V, T);
-        ca_os_sleep(1000U);
+        ca_os_delay_ms(1000U);   /* no scheduler here: ca_os_sleep() would return at once */
     }
 }

@@ -195,42 +195,55 @@ static u32 task_monitor(void *arg) {
  * CLI HOOK - user commands for message buffer
  * ============================================================================= */
 
-static bool user_cli_handler(c_str *pcmd)
+/* one entry per command word; each gets the line without its word */
+static bool start_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("start | stop | show | clear");
-        return false;
-    }
-    if (ca_strncmp(p, "start", 5) == 0) {
-        print_enabled = 1;
-        CLI_PUT_N("Print ENABLED");
-        return true;
-    }
-    if (ca_strncmp(p, "stop", 4) == 0) {
-        print_enabled = 0;
-        CLI_PUT_N("Print DISABLED");
-        return true;
-    }
-    if (ca_strncmp(p, "show", 4) == 0) {
-        CLI_PUT_N("--- Message Buffer Statistics:");
-        CLI_PRINTF_N("   Messages sent    : %u", messages_sent);
-        CLI_PRINTF_N("   Messages received: %u", messages_received);
-        CLI_PRINTF_N("   Writer cycles    : %u", writer_cycles);
-        CLI_PRINTF_N("   Reader cycles    : %u", reader_cycles);
-        CLI_PRINTF_N("   Messages in queue: %u", ca_message_count(&msg_buffer));
-        CLI_PRINTF_N("   Free space       : %u bytes", ca_message_space_available(&msg_buffer));
-        CLI_PRINTF_N("   Print status     : %s", print_enabled ? "ENABLED" : "DISABLED");
-        return true;
-    }
-    if (ca_strncmp(p, "clear", 5) == 0) {
-        ca_message_reset(&msg_buffer);
-        CLI_PUT_N("Message buffer cleared!");
-        return true;
-    }
-    return false;
+    (void)args;
+    print_enabled = 1;
+    CLI_PUT_N("Print ENABLED");
+    return true;
 }
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
+
+static bool stop_cmd(c_str *args)
+{
+    (void)args;
+    print_enabled = 0;
+    CLI_PUT_N("Print DISABLED");
+    return true;
+}
+
+static bool show_cmd(c_str *args)
+{
+    (void)args;
+    CLI_PUT_N("--- Message Buffer Statistics:");
+    CLI_PRINTF_N("   Messages sent    : %u", messages_sent);
+    CLI_PRINTF_N("   Messages received: %u", messages_received);
+    CLI_PRINTF_N("   Writer cycles    : %u", writer_cycles);
+    CLI_PRINTF_N("   Reader cycles    : %u", reader_cycles);
+    CLI_PRINTF_N("   Messages in queue: %u", ca_message_count(&msg_buffer));
+    CLI_PRINTF_N("   Free space       : %u bytes", ca_message_space_available(&msg_buffer));
+    CLI_PRINTF_N("   Print status     : %s", print_enabled ? "ENABLED" : "DISABLED");
+    return true;
+}
+
+static bool clear_cmd(c_str *args)
+{
+    (void)args;
+    ca_message_reset(&msg_buffer);
+    CLI_PUT_N("Message buffer cleared!");
+    return true;
+}
+
+static const ca_cli_cmd_t s_user_cmds[] = {
+    { "start", "start     : workers print their lines", { start_cmd, STACK_MEDIUM } },
+    { "stop", "stop      : workers stop printing", { stop_cmd, STACK_MEDIUM } },
+    { "show", "show      : message buffer statistics + print state", { show_cmd, STACK_MEDIUM } },
+    { "clear", "clear     : empty the message buffer", { clear_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_user_table = {
+    "user", s_user_cmds, (u16)(sizeof(s_user_cmds) / sizeof(s_user_cmds[0])), NULL
+};
 
 
 
@@ -372,14 +385,9 @@ static void tw_run(u32 sec) {
                  stuck ? " STUCK" : "", ok ? "PASS" : "FAIL");
 }
 
-static bool tw_cli_handler(c_str *pcmd) {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("twait     : [sec] timed wait check on the message buffer: latency + timeout");
-        return false;
-    }
-    if (ca_strncmp(p, "twait", 5) != 0) return false;
-    p = ca_skip_sp(p + 5);
+/* twait — the line arrives without the command word */
+static bool twait_cmd(c_str *args) {
+    const char *p = (*args)->data;
     u32 sec = 3U;
     if (*p >= '0' && *p <= '9') {
         const i32 s = ca_strtol(p, 10);
@@ -394,7 +402,13 @@ static bool tw_cli_handler(c_str *pcmd) {
     tw_busy = false;
     return true;
 }
-static ca_cli_node_t s_tw_cli_node = { tw_cli_handler, NULL };
+static const ca_cli_cmd_t s_twait_cmds[] = {
+    { "twait", "twait     : [sec] timed wait check on the message buffer: latency + timeout", { twait_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_twait_table = {
+    "twait", s_twait_cmds, (u16)(sizeof(s_twait_cmds) / sizeof(s_twait_cmds[0])), NULL
+};
 
 #endif /* ENABLE_CLI */
 
@@ -444,9 +458,9 @@ void ca_os_main(void) {
         ca_os_job("reader",  CA_TH_LEVEL2, task_reader,  NULL, STACK_MEDIUM, CA_JOB_STD, CA_FAULT_ASSERT);
         ca_os_job("monitor", CA_TH_LEVEL1, task_monitor, NULL, STACK_SMALL,  CA_JOB_STD, CA_FAULT_ASSERT);
 
-        EVAL_CLI( ca_cli_register(&s_user_cli_node); )
+        EVAL_CLI( ca_cli_register_table(&s_user_table); )
     )
-    EVAL_CLI( ca_cli_register(&s_tw_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_twait_table); )
     ca_os_run(true);
 }
 

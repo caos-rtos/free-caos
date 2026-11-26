@@ -242,35 +242,36 @@ static u32 task_stats(void *arg) {
 }
 
 /* ============================================================================
- * CLI hook
+ * CLI commands
  * ========================================================================== */
 
-static bool user_cli_handler(c_str *pcmd)
+/* one entry per command word; each gets the line without its word */
+static bool show_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("show");
-        return false;
-    }
-    if (ca_strncmp(p, "show", 4) == 0) {
-        u32 pool_free = ca_block_pool_free_count(&block_pool);
-        u32 pool_tot  = ca_block_pool_total(&block_pool);
-        CLI_PUT_N("--- Example 20 ---");
-        CLI_PRINTF_N("  BlockPool  alloc    : %u", alloc_ok);
-        CLI_PRINTF_N("  BlockPool  fail     : %u", alloc_fail);
-        CLI_PRINTF_N("  BlockPool  consumed : %u", consumed);
-        CLI_PRINTF_N("  BlockPool  free     : %u / %u", pool_free, pool_tot);
-        CLI_PRINTF_N("  Periodic   count    : %u", periodic_count);
-        CLI_PRINTF_N("  Periodic   drift_max: %u ms", drift_max_ms);
-        CLI_PRINTF_N("  Timedlock  ok       : %u", timedlock_ok);
-        CLI_PRINTF_N("  Timedlock  timeout  : %u", timedlock_timeout);
-        CLI_PRINTF_N("  Timedwait  ok       : %u", timedwait_ok);
-        CLI_PRINTF_N("  Timedwait  timeout  : %u", timedwait_timeout);
-        return true;
-    }
-    return false;
+    (void)args;
+    u32 pool_free = ca_block_pool_free_count(&block_pool);
+    u32 pool_tot  = ca_block_pool_total(&block_pool);
+    CLI_PUT_N("--- Example 20 ---");
+    CLI_PRINTF_N("  BlockPool  alloc    : %u", alloc_ok);
+    CLI_PRINTF_N("  BlockPool  fail     : %u", alloc_fail);
+    CLI_PRINTF_N("  BlockPool  consumed : %u", consumed);
+    CLI_PRINTF_N("  BlockPool  free     : %u / %u", pool_free, pool_tot);
+    CLI_PRINTF_N("  Periodic   count    : %u", periodic_count);
+    CLI_PRINTF_N("  Periodic   drift_max: %u ms", drift_max_ms);
+    CLI_PRINTF_N("  Timedlock  ok       : %u", timedlock_ok);
+    CLI_PRINTF_N("  Timedlock  timeout  : %u", timedlock_timeout);
+    CLI_PRINTF_N("  Timedwait  ok       : %u", timedwait_ok);
+    CLI_PRINTF_N("  Timedwait  timeout  : %u", timedwait_timeout);
+    return true;
 }
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
+
+static const ca_cli_cmd_t s_user_cmds[] = {
+    { "show", "show      : block pool and example counters", { show_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_user_table = {
+    "user", s_user_cmds, (u16)(sizeof(s_user_cmds) / sizeof(s_user_cmds[0])), NULL
+};
 
 /* ============================================================================
  * 'twkill [sec]': handoff to a waiter that is removed while it waits (27/09)
@@ -382,14 +383,9 @@ static void tk_run(u8 kind, u32 sec) {
                  setup ? " SETUP_FAILED" : "", ok ? "PASS" : "FAIL");
 }
 
-static bool tk_cli_handler(c_str *pcmd) {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("twkill    : [sec] mutex/sem handoff skips a waiter killed while waiting");
-        return false;
-    }
-    if (ca_strncmp(p, "twkill", 6) != 0) return false;
-    p = ca_skip_sp(p + 6);
+/* twkill — the line arrives without the command word */
+static bool twkill_cmd(c_str *args) {
+    const char *p = (*args)->data;
     u32 sec = 3U;
     if (*p >= '0' && *p <= '9') {
         const i32 v = ca_strtol(p, 10);
@@ -404,7 +400,13 @@ static bool tk_cli_handler(c_str *pcmd) {
     tk_run(1U, sec);
     return true;
 }
-static ca_cli_node_t s_tk_cli_node = { tk_cli_handler, NULL };
+static const ca_cli_cmd_t s_twkill_cmds[] = {
+    { "twkill", "twkill    : [sec] mutex/sem handoff skips a waiter killed while waiting", { twkill_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_twkill_table = {
+    "twkill", s_twkill_cmds, (u16)(sizeof(s_twkill_cmds) / sizeof(s_twkill_cmds[0])), NULL
+};
 
 #endif /* ENABLE_CLI */
 
@@ -548,14 +550,9 @@ static void tw_run(u32 sec) {
                  stuck ? " STUCK" : "", ok ? "PASS" : "FAIL");
 }
 
-static bool tw_cli_handler(c_str *pcmd) {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("twait     : [sec] timed wait check on the mutex: latency + timeout");
-        return false;
-    }
-    if (ca_strncmp(p, "twait", 5) != 0) return false;
-    p = ca_skip_sp(p + 5);
+/* twait — the line arrives without the command word */
+static bool twait_cmd(c_str *args) {
+    const char *p = (*args)->data;
     u32 sec = 3U;
     if (*p >= '0' && *p <= '9') {
         const i32 s = ca_strtol(p, 10);
@@ -570,7 +567,13 @@ static bool tw_cli_handler(c_str *pcmd) {
     tw_busy = false;
     return true;
 }
-static ca_cli_node_t s_tw_cli_node = { tw_cli_handler, NULL };
+static const ca_cli_cmd_t s_twait_cmds[] = {
+    { "twait", "twait     : [sec] timed wait check on the mutex: latency + timeout", { twait_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_twait_table = {
+    "twait", s_twait_cmds, (u16)(sizeof(s_twait_cmds) / sizeof(s_twait_cmds[0])), NULL
+};
 
 #endif /* ENABLE_CLI */
 
@@ -630,10 +633,10 @@ void ca_os_main(void) {
     /* Stats */
     ca_os_job("stats",    CA_TH_LEVEL1, task_stats,    NULL, STACK_SMALL, CA_JOB_STD, CA_FAULT_ASSERT);
 
-    EVAL_CLI( ca_cli_register(&s_user_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_user_table); )
 
-    EVAL_CLI( ca_cli_register(&s_tw_cli_node); )
-    EVAL_CLI( ca_cli_register(&s_tk_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_twait_table); )
+    EVAL_CLI( ca_cli_register_table(&s_twkill_table); )
     ca_os_run(true);
 }
 

@@ -155,43 +155,52 @@ static u32 task_watchdog(void *arg) {
 }
 
 /* ============================================================================
- * CLI hook
+ * CLI commands
  * ========================================================================== */
 
-static bool user_cli_handler(c_str *pcmd)
+/* one entry per command word; each gets the line without its word */
+static bool err_t_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("err_t | err_p | show");
-        return false;
-    }
-    if (ca_strncmp(p, "err_t", 5) == 0) {
-        ca_event_set(&eg_errors, BIT_ERR_TEMP);
-        CLI_PUT_N("Injected ERR_TEMP");
-        return true;
-    }
-    if (ca_strncmp(p, "err_p", 5) == 0) {
-        ca_event_set(&eg_errors, BIT_ERR_PRES);
-        CLI_PUT_N("Injected ERR_PRES");
-        return true;
-    }
-    if (ca_strncmp(p, "show", 4) == 0) {
-        u32 sb = ca_event_get(&eg_sensors);
-        u32 eb = ca_event_get(&eg_errors);
-        CLI_PUT_N("--- Example 17 ---");
-        CLI_PRINTF_N("  Aggregations  : %u", aggregations);
-        CLI_PRINTF_N("  WDG alerts    : %u", watchdog_alerts);
-        CLI_PRINTF_N("  Sensor bits   : 0x%02X (T=%u P=%u H=%u)",
-            sb,
-            (sb & BIT_TEMP) ? 1u : 0u,
-            (sb & BIT_PRES) ? 1u : 0u,
-            (sb & BIT_HUM)  ? 1u : 0u);
-        CLI_PRINTF_N("  Error bits    : 0x%02X", eb);
-        return true;
-    }
-    return false;
+    (void)args;
+    ca_event_set(&eg_errors, BIT_ERR_TEMP);
+    CLI_PUT_N("Injected ERR_TEMP");
+    return true;
 }
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
+
+static bool err_p_cmd(c_str *args)
+{
+    (void)args;
+    ca_event_set(&eg_errors, BIT_ERR_PRES);
+    CLI_PUT_N("Injected ERR_PRES");
+    return true;
+}
+
+static bool show_cmd(c_str *args)
+{
+    (void)args;
+    u32 sb = ca_event_get(&eg_sensors);
+    u32 eb = ca_event_get(&eg_errors);
+    CLI_PUT_N("--- Example 17 ---");
+    CLI_PRINTF_N("  Aggregations  : %u", aggregations);
+    CLI_PRINTF_N("  WDG alerts    : %u", watchdog_alerts);
+    CLI_PRINTF_N("  Sensor bits   : 0x%02X (T=%u P=%u H=%u)",
+        sb,
+        (sb & BIT_TEMP) ? 1u : 0u,
+        (sb & BIT_PRES) ? 1u : 0u,
+        (sb & BIT_HUM)  ? 1u : 0u);
+    CLI_PRINTF_N("  Error bits    : 0x%02X", eb);
+    return true;
+}
+
+static const ca_cli_cmd_t s_user_cmds[] = {
+    { "err_t", "err_t     : inject ERR_TEMP", { err_t_cmd, STACK_MEDIUM } },
+    { "err_p", "err_p     : inject ERR_PRES", { err_p_cmd, STACK_MEDIUM } },
+    { "show", "show      : sensor and error event bits", { show_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_user_table = {
+    "user", s_user_cmds, (u16)(sizeof(s_user_cmds) / sizeof(s_user_cmds[0])), NULL
+};
 
 
 
@@ -333,14 +342,9 @@ static void tw_run(u32 sec) {
                  stuck ? " STUCK" : "", ok ? "PASS" : "FAIL");
 }
 
-static bool tw_cli_handler(c_str *pcmd) {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("twait     : [sec] timed wait check on the event group: latency + timeout");
-        return false;
-    }
-    if (ca_strncmp(p, "twait", 5) != 0) return false;
-    p = ca_skip_sp(p + 5);
+/* twait — the line arrives without the command word */
+static bool twait_cmd(c_str *args) {
+    const char *p = (*args)->data;
     u32 sec = 3U;
     if (*p >= '0' && *p <= '9') {
         const i32 s = ca_strtol(p, 10);
@@ -355,7 +359,13 @@ static bool tw_cli_handler(c_str *pcmd) {
     tw_busy = false;
     return true;
 }
-static ca_cli_node_t s_tw_cli_node = { tw_cli_handler, NULL };
+static const ca_cli_cmd_t s_twait_cmds[] = {
+    { "twait", "twait     : [sec] timed wait check on the event group: latency + timeout", { twait_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_twait_table = {
+    "twait", s_twait_cmds, (u16)(sizeof(s_twait_cmds) / sizeof(s_twait_cmds[0])), NULL
+};
 
 #endif /* ENABLE_CLI */
 
@@ -395,9 +405,9 @@ void ca_os_main(void) {
         ca_os_job("aggr",  CA_TH_LEVEL1, task_aggregator,  NULL, STACK_SMALL, CA_JOB_STD, CA_FAULT_ASSERT);
         ca_os_job("wdog",  CA_TH_LEVEL1, task_watchdog,    NULL, STACK_SMALL, CA_JOB_STD, CA_FAULT_ASSERT);
 
-        EVAL_CLI( ca_cli_register(&s_user_cli_node); )
+        EVAL_CLI( ca_cli_register_table(&s_user_table); )
     )
-    EVAL_CLI( ca_cli_register(&s_tw_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_twait_table); )
     ca_os_run(true);
 }
 #else /* EN_EVENT */

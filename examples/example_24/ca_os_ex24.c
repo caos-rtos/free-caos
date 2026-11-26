@@ -228,67 +228,71 @@ static u32 task_monitor(void *arg)
  * CLI — local to this example
  * ========================================================================== */
 
-static bool user_cli_handler(c_str *pcmd)
+/* one entry per command word; each gets the line without its word */
+static bool info_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("info | wire");
-        return false;
-    }
-    if (ca_strncmp(p, "info", 4) == 0) {
-        CLI_PUT_N("--- Example 24: TIM3 generator + TIM2 ETR counter ---");
-        CLI_PUT_N("  wiring   : " WIRE_TXT);
-        CLI_PUT_N("  generator: " GEN_TXT);
-        CLI_PUT_N("  counter  : " ETR_TXT);
-        CLI_PUT_N("  leds     : " LED_TXT "  (on-board, no connector)");
-        CLI_PRINTF_N("  preset   : %u ETR edges -> 1 IRQ", (u32)PRESET_CNT);
-        CLI_PRINTF_N("  10khz_irq: %u", (u32)g_10khz_irq);
-        CLI_PRINTF_N("  1s_irq   : %u", (u32)g_1s_irq);
-        return true;
-    }
-    if (ca_strncmp(p, "wire", 4) == 0) {
-        /* Continuity test of the single jumper. TIM3 must be STOPPED first:
-         * its ISR toggles the very pin we are driving, 10000 times a second,
-         * so every level written here would be overwritten before the read
-         * and the test would report FAIL on a perfectly good jumper. */
-        ca_timer_stop(TIM_GEN);
-        ca_timer_stop(TIM_CNT);
-
-        ca_gpio_configure(GPIO_OUT_PORT, GPIO_OUT_PIN, CA_GPIO_MODE_OUTPUT,
-                          CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
-        ca_gpio_configure(GPIO_ETR_PORT, GPIO_ETR_PIN, CA_GPIO_MODE_INPUT,
-                          CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
-
-        ca_gpio_write(GPIO_OUT_PORT, GPIO_OUT_PIN, 0);
-        for (volatile u32 d = 0; d < 20000U; d++) { }
-        u8 lo = ca_gpio_read(GPIO_ETR_PORT, GPIO_ETR_PIN);
-        ca_gpio_write(GPIO_OUT_PORT, GPIO_OUT_PIN, 1);
-        for (volatile u32 d = 0; d < 20000U; d++) { }
-        u8 hi = ca_gpio_read(GPIO_ETR_PORT, GPIO_ETR_PIN);
-
-        CLI_PUT_N("  " WIRE_TXT);
-        CLI_PUT_N("    out: " GEN_TXT);
-        CLI_PUT_N("    in : " ETR_TXT);
-        CLI_PRINTF_N("  drive0->read%u  drive1->read%u  %s", lo, hi,
-                     (lo == 0 && hi == 1) ? "OK (jumper present)"
-                                          : "FAIL (jumper missing/wrong)");
-        /* One line the bench can read, identical in every example that has a
-         * `wire` command - see the note in ex64. */
-        CLI_PRINTF_N("  WIRE RESULT : %s  (%u/1)",
-                     (lo == 0 && hi == 1) ? "OK" : "FAIL",
-                     (u32)((lo == 0 && hi == 1) ? 1U : 0U));
-        /* TIM3/TIM2 are stopped and the pins are plain GPIO now: there is no
-         * way back to the measurement from here, so reboot rather than asking
-         * for the button. The delay leaves the result on screen. */
-        CLI_PUT_N("  rebooting in 2.5 s to go back to the timer...");
-        ca_os_sleep(2500);
-        ca_os_reset();
-        return true;
-    }
-    return false;
+    (void)args;
+    CLI_PUT_N("--- Example 24: TIM3 generator + TIM2 ETR counter ---");
+    CLI_PUT_N("  wiring   : " WIRE_TXT);
+    CLI_PUT_N("  generator: " GEN_TXT);
+    CLI_PUT_N("  counter  : " ETR_TXT);
+    CLI_PUT_N("  leds     : " LED_TXT "  (on-board, no connector)");
+    CLI_PRINTF_N("  preset   : %u ETR edges -> 1 IRQ", (u32)PRESET_CNT);
+    CLI_PRINTF_N("  10khz_irq: %u", (u32)g_10khz_irq);
+    CLI_PRINTF_N("  1s_irq   : %u", (u32)g_1s_irq);
+    return true;
 }
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
+
+static bool wire_cmd(c_str *args)
+{
+    (void)args;
+    /* Continuity test of the single jumper. TIM3 must be STOPPED first:
+     * its ISR toggles the very pin we are driving, 10000 times a second,
+     * so every level written here would be overwritten before the read
+     * and the test would report FAIL on a perfectly good jumper. */
+    ca_timer_stop(TIM_GEN);
+    ca_timer_stop(TIM_CNT);
+
+    ca_gpio_configure(GPIO_OUT_PORT, GPIO_OUT_PIN, CA_GPIO_MODE_OUTPUT,
+                      CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
+    ca_gpio_configure(GPIO_ETR_PORT, GPIO_ETR_PIN, CA_GPIO_MODE_INPUT,
+                      CA_GPIO_OTYPE_PP, CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
+
+    ca_gpio_write(GPIO_OUT_PORT, GPIO_OUT_PIN, 0);
+    for (volatile u32 d = 0; d < 20000U; d++) { }
+    u8 lo = ca_gpio_read(GPIO_ETR_PORT, GPIO_ETR_PIN);
+    ca_gpio_write(GPIO_OUT_PORT, GPIO_OUT_PIN, 1);
+    for (volatile u32 d = 0; d < 20000U; d++) { }
+    u8 hi = ca_gpio_read(GPIO_ETR_PORT, GPIO_ETR_PIN);
+
+    CLI_PUT_N("  " WIRE_TXT);
+    CLI_PUT_N("    out: " GEN_TXT);
+    CLI_PUT_N("    in : " ETR_TXT);
+    CLI_PRINTF_N("  drive0->read%u  drive1->read%u  %s", lo, hi,
+                 (lo == 0 && hi == 1) ? "OK (jumper present)"
+                                      : "FAIL (jumper missing/wrong)");
+    /* One line the bench can read, identical in every example that has a
+     * `wire` command - see the note in ex64. */
+    CLI_PRINTF_N("  WIRE RESULT : %s  (%u/1)",
+                 (lo == 0 && hi == 1) ? "OK" : "FAIL",
+                 (u32)((lo == 0 && hi == 1) ? 1U : 0U));
+    /* TIM3/TIM2 are stopped and the pins are plain GPIO now: there is no
+     * way back to the measurement from here, so reboot rather than asking
+     * for the button. The delay leaves the result on screen. */
+    CLI_PUT_N("  rebooting in 2.5 s to go back to the timer...");
+    ca_os_sleep(2500);
+    ca_os_reset();
+    return true;
+}
+
+static const ca_cli_cmd_t s_user_cmds[] = {
+    { "info", "info      : wiring, generator, counter, preset", { info_cmd, STACK_MEDIUM } },
+    { "wire", "wire      : continuity test of the jumper", { wire_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_user_table = {
+    "user", s_user_cmds, (u16)(sizeof(s_user_cmds) / sizeof(s_user_cmds[0])), NULL
+};
 
 /* ============================================================================
  * ENTRY POINTS
@@ -338,7 +342,7 @@ void ca_os_main(void)
     ca_timer_init();
     ca_os_job("monitor", CA_TH_LEVEL3, task_monitor, NULL, STACK_SMALL, CA_JOB_STD, CA_FAULT_RESTART_THREAD);
 
-    EVAL_CLI( ca_cli_register(&s_user_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_user_table); )
 
     ca_os_run(true);
 }

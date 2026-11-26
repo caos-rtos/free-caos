@@ -36,6 +36,7 @@
 
 #define SHA512_DIGEST_SIZE      64      /* Digest in bytes */
 #define SHA512_BLOCK_SIZE       128     /* Compression block in bytes */
+#define SHA384_DIGEST_SIZE      48      /* SHA-384: SHA-512 with another IV, truncated */
 
 /* ============================================================================
  * DATA TYPES
@@ -79,11 +80,29 @@ void ca_sha512_final(ca_sha512_ctx_t *ctx, u8 *digest);
 
 /**
  * @brief One-shot calculation: init + update + final.
+ * @param ctx    Working context from the caller; zeroed on return
  * @param data   Message
  * @param len    Length in bytes
  * @param digest Output buffer, SHA512_DIGEST_SIZE bytes
  */
-void ca_sha512(const u8 *data, u32 len, u8 *digest);
+void ca_sha512(ca_sha512_ctx_t *ctx, const u8 *data, u32 len, u8 *digest);
+
+/* ---- SHA-384 (FIPS 180-4 6.5) and HMAC-SHA384 (RFC 2104) ----------------
+ * Same context and ca_sha512_update(): only init and final differ. Used by
+ * TLS 1.3 for TLS_AES_256_GCM_SHA384. */
+
+/** @brief Initializes ctx for SHA-384 (absorb with ca_sha512_update) */
+void ca_sha384_init(ca_sha512_ctx_t *ctx);
+
+/** @brief SHA-384 digest, SHA384_DIGEST_SIZE bytes; ctx zeroed */
+void ca_sha384_final(ca_sha512_ctx_t *ctx, u8 *digest);
+
+/** @brief One-shot SHA-384, context from the caller; zeroed on return */
+void ca_sha384(ca_sha512_ctx_t *ctx, const u8 *data, u32 len, u8 *digest);
+
+/** @brief HMAC-SHA384 using a caller's work context (no context on the stack) */
+void ca_hmac_sha384_ctx(ca_sha512_ctx_t *work, const u8 *key, u32 key_len,
+                        const u8 *data, u32 len, u8 *mac);
 
 #if EN_SHA512_TEST
 /**

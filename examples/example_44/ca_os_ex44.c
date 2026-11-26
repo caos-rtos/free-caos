@@ -48,7 +48,7 @@
 /* ============================================================================
  * Network
  * ============================================================================ */
-static const ca_mac_t s_mac = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x44U } };
+static const ca_mac_t s_mac = CA_EXAMPLE_MAC(44);
 
 static volatile ca_ipv4_t s_ip         = { .addr = 0U };
 static volatile bool   s_dhcp_bound = false;
@@ -58,7 +58,7 @@ static void on_link_change(bool up);
 static ca_eth_cfg_t eth_cfg = {
     .phy_addr = 0U,
     .rmii     = true,
-    .mac      = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x44U } },
+    .mac      = CA_EXAMPLE_MAC(44),
     .link_cb  = on_link_change,
 };
 
@@ -109,7 +109,7 @@ static void on_link_change(bool up)
  * ============================================================================ */
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .addr = 0U },
-    .mac  = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x44U } },
+    .mac  = CA_EXAMPLE_MAC(44),
     .udp  = { .bindings = { {0U, NULL} }, .count = 0U },
     .icmp = { .echo_reply = true },
 };

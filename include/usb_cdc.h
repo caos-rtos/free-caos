@@ -49,6 +49,9 @@
 
 #define USB_CDC_FIFO_WORDS_NOTIF  8U
 #define USB_CDC_FIFO_WORDS_DATA   64U
+/* Largest bulk OUT packet the class reads in one go: the HS MPS when the
+ * HS driver is built, the FS one otherwise. */
+#define USB_CDC_RX_MAX            64U
 
 /* Serial line status (CDC SET_LINE_CODING, 7 bytes on wire). */
 typedef struct {
@@ -60,8 +63,16 @@ typedef struct {
 
 typedef struct {
     ca_usb_device_type_t header;        /* tag + ops (D19) — first field */
-    u16  mps;                            /* Data bulk MPS (64 FS, 512 HS); 0 = 64 */
-    void (*on_rx)  (const u8 *buf, u16 len);          /* data from host */
+    u16  mps;                            /* Data bulk MPS (64 FS, 512 HS); 0 = per speed (ca_usb_bulk_mps) */
+    /* Data from the host, two modes - set ONE of the two:
+     *  on_rx_ready (PULL, for data): ISR context, no data; the application
+     *    task then drains with ca_usb_cdc_read(). Unread packets stay in the
+     *    driver queue and the endpoint NAKs the host: nothing is lost.
+     *  on_rx (PUSH, legacy): ISR context, the bytes themselves. No
+     *    back-pressure: a callback that cannot keep up must drop. Meant for a
+     *    console typed by hand. Ignored when on_rx_ready is set. */
+    void (*on_rx)  (const u8 *buf, u16 len);
+    void (*on_rx_ready)(void);
     void (*on_line)(const ca_usb_cdc_line_t *line, u8 control);  /* opt. */
 } __attribute__((aligned(4))) ca_usb_cdc_cfg_t;
 
@@ -72,6 +83,12 @@ extern const ca_usb_class_ops_t ca_usb_cdc_ops;
 /* Sends len bytes to the host on the bulk IN EP. Returns false if the driver's
    TX queue is full (retry after ca_os_yield). */
 bool ca_usb_cdc_write(p_str message);
+
+/* PULL mode (cfg->on_rx_ready): copies up to max_len received bytes into buf,
+   returns how many (0 = nothing pending). Task context, ONE reader. Call it
+   until it returns 0 after each on_rx_ready(): the notification is per packet,
+   but several packets may be waiting. */
+u16 ca_usb_cdc_read(u8 *buf, u16 max_len);
 
 /* true when the host has asserted DTR (terminal opened). */
 bool ca_usb_cdc_connected(void);

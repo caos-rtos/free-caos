@@ -1226,16 +1226,9 @@ static void cmd_info(void) {
     CLI_PRINTF_N("  qheap    : %s", s_qh_ok ? "allocated" : "ALLOCATION FAILED");
 }
 
-static bool user_cli_handler(c_str *pcmd) {
-    const char *p = ca_skip_sp((*pcmd)->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("e87       : start [phase|all] [sec] | lat [sec] [churn|heap|spin] | info");
-        return false;
-    }
-    if (ca_strncmp(p, "e87", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
-
+/* e87 — the line arrives without the command word */
+static bool e87_cmd(c_str *args) {
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "start", 5) == 0) {
         cmd_start(p + 5);
         return true;
@@ -1251,18 +1244,24 @@ static bool user_cli_handler(c_str *pcmd) {
     CLI_PUT_N("e87       : start [phase|all] [sec] | info");
     return true;
 }
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
+static const ca_cli_cmd_t s_e87_cmds[] = {
+    { "e87", "e87       : start [phase|all] [sec] | lat [sec] [churn|heap|spin] | info", { e87_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_e87_table = {
+    "e87", s_e87_cmds, (u16)(sizeof(s_e87_cmds) / sizeof(s_e87_cmds[0])), NULL
+};
 
 /* ---- optional network load (see the header) ---------------------------- */
 
 #if EX87_NET
 /* Pre-scheduler: ca_stdout_* needs a task context, so PUT_N. */
 PRIVATE_STRING(m87n, "example_87: ca_net_init FAILED - no network load");
-static const ca_mac_t s_mac = { .v = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x87U } };
+static const ca_mac_t s_mac = CA_EXAMPLE_MAC(87);
 
 static const ca_net_cfg_t s_net_cfg = {
     .ip   = { .addr = 0U },                 /* 0.0.0.0 until DHCP binds */
-    .mac  = { .v = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x87U } },
+    .mac  = CA_EXAMPLE_MAC(87),
     .udp  = { .bindings = {{0}}, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -1270,7 +1269,7 @@ static const ca_net_cfg_t s_net_cfg = {
 static ca_eth_cfg_t s_eth_cfg = {
     .phy_addr = 0U,
     .rmii     = true,
-    .mac      = { .v = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x87U } },
+    .mac      = CA_EXAMPLE_MAC(87),
     .link_cb  = NULL,
 };
 
@@ -1407,7 +1406,7 @@ void ca_os_main(void) {
     ca_os_job("net",        CA_TH_LEVEL4, task_net,      NULL, STACK_SMALL, CA_JOB_STD,
               CA_FAULT_RESTART_THREAD);
 #endif
-    ca_cli_register(&s_user_cli_node);
+    ca_cli_register_table(&s_e87_table);
     ca_os_run(true);
 }
 

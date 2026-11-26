@@ -46,6 +46,20 @@ bool ca_exti_init(u8 port, u8 pin, ca_exti_edge_t edge, ca_exti_cb_t cb);
 void ca_exti_enable(u8 pin);
 void ca_exti_disable(u8 pin);
 
+#if EN_TAMP
+/* Tamper on the user-button pin, PC13 on every Nucleo of the project
+ * (TAMP_IN1 on U5/H5, RTC_TAMP1 on F4/F7/H7), rising edge = press.
+ * On the event the HARDWARE erases first, before any code runs:
+ *   all          backup registers
+ *   U5, H5       SRAM2 (the secret area, see ca_memory_secret) and backup SRAM
+ *                (confirmed mode), plus caches and the crypto peripherals' state
+ *   H7           backup SRAM
+ *   F4, F7       backup registers only: their backup SRAM survives a tamper
+ * then cb runs in the interrupt. F4/F7/H7 need the RTC clocked (EN_RTC).
+ * False where it cannot be armed (F1, RTC not running). */
+bool ca_exti_tamper_enable(ca_exti_cb_t cb);
+void ca_exti_tamper_disable(void);
+#endif
 
 #endif /* EN_EXTI */
 #endif /* EXTI_H */

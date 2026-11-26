@@ -117,17 +117,20 @@ static void opa_test(void)
 }
 
 #if ENABLE_CLI
-static bool ex99_cli(c_str *pcmd)
+/* opamp — the line arrives without the command word */
+static bool opamp_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) { CLI_PUT_N("opamp: test"); return false; }
-    if (ca_strncmp(p, "opamp", 5) != 0) return false;
-    p = ca_skip_sp(p + 5);
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "test", 4) == 0) { opa_test(); return true; }
-    CLI_PUT_N("opamp: test");
-    return true;
+    return false;                   /* cli prints the help line */
 }
-static ca_cli_node_t s_cli = { ex99_cli, NULL };
+static const ca_cli_cmd_t s_opamp_cmds[] = {
+    { "opamp", "opamp     : test", { opamp_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_opamp_table = {
+    "opamp", s_opamp_cmds, (u16)(sizeof(s_opamp_cmds) / sizeof(s_opamp_cmds[0])), NULL
+};
 #endif
 
 void ca_os_configure(void)
@@ -141,7 +144,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_cli);
+        ca_cli_register_table(&s_opamp_table);
     )
 }
 

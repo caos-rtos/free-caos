@@ -668,64 +668,81 @@ static void bridge_cmd(const char *p)
  * CLI
  * ========================================================================== */
 
-static bool user_cli_handler(c_str *pcmd)
+/* one entry per command word; each gets the line without its word */
+static bool bridge_word(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("hello | status | show | wire | bridge echo|conv|baud <n>");
-        return false;
-    }
-    if (ca_strncmp(p, "bridge", 6) == 0) {
-        bridge_cmd(p + 6);
-        return true;
-    }
-    if (ca_strncmp(p, "wire", 4) == 0) {
-        /* Continuity test of the two crossed jumpers, on plain GPIO: no UART
-         * involved, so a FAIL here is the wire and not the baud rate, the AF
-         * or the pin map. Reprogramming the pins as plain GPIO below takes them
-         * away from the UART (MODER stops being "alternate function"), so no
-         * deinit call is needed - and there is none in the ca_uart_* API.
-         * The pair is CROSSED: master TX reaches slave RX, and back. */
-        test_wire();
-        /* The pins are plain GPIO now, not UART AF: reboot rather than trying
-         * to put both peripherals back by hand. The delay leaves the result up. */
-        CLI_PUT_N("  rebooting in 2.5 s to restore the UARTs...");
-        ca_os_sleep(2500);
-        ca_os_reset();
-        return true;
-    }
-    if (ca_strncmp(p, "hello", 5) == 0) {
-        uart_send(UART_MASTER, CMD_HELLO, NULL, 0);
-        g_tx_hello++;
-        CLI_PUT_N("HELLO sent");
-        return true;
-    }
-    if (ca_strncmp(p, "status", 6) == 0) {
-        uart_send(UART_MASTER, CMD_STATUS, NULL, 0);
-        g_tx_status++;
-        CLI_PUT_N("STATUS sent");
-        return true;
-    }
-    if (ca_strncmp(p, "show", 4) == 0) {
-        CLI_PUT_N("--- Example 21 multi-instance UART ---");
-        CLI_PUT_N("  wiring: " WIRE_1);
-        CLI_PUT_N("          " WIRE_2);
-        CLI_PRINTF_N("  uart init : master=%s  slave=%s",
-                     g_master_up ? "OK" : "FAILED", g_slave_up ? "OK" : "FAILED");
-        CLI_PUT_N("  [MASTER  " MASTER_PINS "]");
-        CLI_PRINTF_N("    TX HELLO      : %u", g_tx_hello);
-        CLI_PRINTF_N("    TX STATUS     : %u", g_tx_status);
-        CLI_PUT_N("  [MASTER  RX  <-- slave]");
-        CLI_PRINTF_N("    RX HELLO resp : %u  (chk_err=%u)", g_rx_hello,  g_rx_m.err);
-        CLI_PRINTF_N("    RX STATUS resp: %u", g_rx_status);
-        CLI_PUT_N("  [SLAVE   " SLAVE_PINS "  <-- master]");
-        CLI_PRINTF_N("    Cmds handled  : %u  (chk_err=%u)", g_slave_cmds, g_rx_s.err);
-        CLI_PRINTF_N("    Slave ticks   : %u  (x10ms)", g_slave_ticks);
-        return true;
-    }
-    return false;
+    const char *p = (*args)->data;
+    bridge_cmd(p);
+    return true;
 }
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
+
+static bool wire_cmd(c_str *args)
+{
+    (void)args;
+    /* Continuity test of the two crossed jumpers, on plain GPIO: no UART
+     * involved, so a FAIL here is the wire and not the baud rate, the AF
+     * or the pin map. Reprogramming the pins as plain GPIO below takes them
+     * away from the UART (MODER stops being "alternate function"), so no
+     * deinit call is needed - and there is none in the ca_uart_* API.
+     * The pair is CROSSED: master TX reaches slave RX, and back. */
+    test_wire();
+    /* The pins are plain GPIO now, not UART AF: reboot rather than trying
+     * to put both peripherals back by hand. The delay leaves the result up. */
+    CLI_PUT_N("  rebooting in 2.5 s to restore the UARTs...");
+    ca_os_sleep(2500);
+    ca_os_reset();
+    return true;
+}
+
+static bool hello_cmd(c_str *args)
+{
+    (void)args;
+    uart_send(UART_MASTER, CMD_HELLO, NULL, 0);
+    g_tx_hello++;
+    CLI_PUT_N("HELLO sent");
+    return true;
+}
+
+static bool status_cmd(c_str *args)
+{
+    (void)args;
+    uart_send(UART_MASTER, CMD_STATUS, NULL, 0);
+    g_tx_status++;
+    CLI_PUT_N("STATUS sent");
+    return true;
+}
+
+static bool show_cmd(c_str *args)
+{
+    (void)args;
+    CLI_PUT_N("--- Example 21 multi-instance UART ---");
+    CLI_PUT_N("  wiring: " WIRE_1);
+    CLI_PUT_N("          " WIRE_2);
+    CLI_PRINTF_N("  uart init : master=%s  slave=%s",
+                 g_master_up ? "OK" : "FAILED", g_slave_up ? "OK" : "FAILED");
+    CLI_PUT_N("  [MASTER  " MASTER_PINS "]");
+    CLI_PRINTF_N("    TX HELLO      : %u", g_tx_hello);
+    CLI_PRINTF_N("    TX STATUS     : %u", g_tx_status);
+    CLI_PUT_N("  [MASTER  RX  <-- slave]");
+    CLI_PRINTF_N("    RX HELLO resp : %u  (chk_err=%u)", g_rx_hello,  g_rx_m.err);
+    CLI_PRINTF_N("    RX STATUS resp: %u", g_rx_status);
+    CLI_PUT_N("  [SLAVE   " SLAVE_PINS "  <-- master]");
+    CLI_PRINTF_N("    Cmds handled  : %u  (chk_err=%u)", g_slave_cmds, g_rx_s.err);
+    CLI_PRINTF_N("    Slave ticks   : %u  (x10ms)", g_slave_ticks);
+    return true;
+}
+
+static const ca_cli_cmd_t s_user_cmds[] = {
+    { "bridge", "bridge    : echo | conv | baud <n>  UART bridge mode", { bridge_word, STACK_MEDIUM } },
+    { "wire", "wire      : continuity test of the two crossed jumpers", { wire_cmd, STACK_MEDIUM } },
+    { "hello", "hello     : send HELLO to the slave UART", { hello_cmd, STACK_MEDIUM } },
+    { "status", "status    : send STATUS to the slave UART", { status_cmd, STACK_MEDIUM } },
+    { "show", "show      : wiring, counters, last frames", { show_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_user_table = {
+    "user", s_user_cmds, (u16)(sizeof(s_user_cmds) / sizeof(s_user_cmds[0])), NULL
+};
 
 /* ============================================================================
  * ENTRY POINTS
@@ -761,7 +778,7 @@ void ca_os_main(void)
     g_slave_task  = ca_os_job_suspend("slave",  CA_TH_LEVEL2, task_slave,  NULL, STACK_SMALL, CA_JOB_STD, CA_FAULT_ASSERT);
     ca_os_job(        "work",   CA_TH_LEVEL2, task_work,   NULL, STACK_SMALL, CA_JOB_STD, CA_FAULT_ASSERT);
 
-    EVAL_CLI( ca_cli_register(&s_user_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_user_table); )
 
     ca_os_run(true);
 }

@@ -23,6 +23,8 @@
  *   6. Bench control via CLI (hw_test, fault phases): "mqx cycle|conn|disc|auto"
  *      - drive connect/disconnect by hand; any of them (except auto) holds
  *        the automatic reconnect of task_mqtt until "mqx auto"
+ *      - cycle/conn only post a request: task_mqtt opens the connection, so
+ *        the TCP socket belongs to a task that stays alive
  *
  * PC Server: start mqtt_server.py in the example directory.
  *   sudo python3 mqtt_server.py --iface enp7s0
@@ -82,7 +84,7 @@
 /* ============================================================================
  * Network
  * ============================================================================ */
-static const ca_mac_t s_mac = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x42U } };
+static const ca_mac_t s_mac = CA_EXAMPLE_MAC(42);
 
 static volatile ca_ipv4_t s_ip         = { .addr = 0U };
 static volatile ca_ipv4_t s_gw         = { .addr = 0U };  /* gateway = broker IP */
@@ -96,7 +98,7 @@ static void on_link_change(bool up);
 static ca_eth_cfg_t eth_cfg = {
     .phy_addr = 0U,
     .rmii     = true,
-    .mac      = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x42U } },
+    .mac      = CA_EXAMPLE_MAC(42),
     .link_cb  = on_link_change,
 };
 
@@ -145,8 +147,17 @@ static void on_mqtt_disconnected(void)
  * for its fault phases (disconnect while a connect is pending, 20 fast
  * reconnect cycles): so these commands HOLD the automatic reconnect until
  * "mqx auto". Output lines start with "MQX ".
+ *
+ * 'cycle' and 'conn' do not connect from the command: a TCP socket belongs to
+ * the task that opened it, and the command runs in a cli_cmd task that ends
+ * right after - the task reaper then closed the new session within a second
+ * ("MQTT DISCONNECTED" after the connect, 20/11). They post a request that
+ * task_mqtt carries out on its next pass (<= 500 ms).
  * ============================================================================ */
 static volatile bool s_mqx_hold = false;
+
+typedef enum { MQX_REQ_NONE = 0, MQX_REQ_CONN, MQX_REQ_CYCLE } mqx_req_t;
+static volatile mqx_req_t s_mqx_req = MQX_REQ_NONE;   /* set by mqx, done by task_mqtt */
 
 #if ENABLE_CLI
 static void mqx_restart(bool drop_old)
@@ -164,39 +175,37 @@ static void mqx_restart(bool drop_old)
     if (!ca_mqtt_service_net_ready()) ca_stdout_put_n("MQX connect refused");
 }
 
-static void mqx_usage(void)
+/* mqx — the line arrives without the command word */
+static bool mqx_cmd(c_str *args)
 {
-    CLI_PUT_N("mqx       : cycle | conn | disc | auto   - bench control of the MQTT session");
-}
-
-static bool mqx_cli(c_str *pcmd)
-{
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) { mqx_usage(); return false; }
-    if (ca_strncmp(p, "mqx", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
-
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "auto", 4) == 0) {
         s_mqx_hold = false;
         CLI_PUT_N("MQX auto reconnect on");
     } else if (ca_strncmp(p, "cycle", 5) == 0) {
         s_mqx_hold = true;
-        mqx_restart(true);
+        s_mqx_req  = MQX_REQ_CYCLE;
     } else if (ca_strncmp(p, "conn", 4) == 0) {
         s_mqx_hold = true;
-        mqx_restart(false);
+        s_mqx_req  = MQX_REQ_CONN;
     } else if (ca_strncmp(p, "disc", 4) == 0) {
         s_mqx_hold = true;
+        s_mqx_req  = MQX_REQ_NONE;     /* a conn not yet taken must not follow */
         ca_mqtt_disconnect();
         CLI_PUT_N("MQX disconnect issued");
     } else {
-        mqx_usage();
+        return false;                   /* cli prints the help line */
     }
     return true;
 }
 
-static ca_cli_node_t s_mqx_node = { mqx_cli, NULL };
-static bool          s_mqx_registered = false;
+static const ca_cli_cmd_t s_mqx_cmds[] = {
+    { "mqx", "mqx       : cycle | conn | disc | auto   - bench control of the MQTT session", { mqx_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_mqx_table = {
+    "mqx", s_mqx_cmds, (u16)(sizeof(s_mqx_cmds) / sizeof(s_mqx_cmds[0])), NULL
+};
 #endif /* ENABLE_CLI */
 
 /* ============================================================================
@@ -253,7 +262,7 @@ static void on_link_change(bool up)
  * ============================================================================ */
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .addr = 0U },
-    .mac  = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x42U } },
+    .mac  = CA_EXAMPLE_MAC(42),
     .udp  = { .bindings = { {0U, NULL} }, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -319,10 +328,7 @@ static u32 task_mqtt(void *arg)
 #if ENABLE_CLI
     /* Registered after the service's own "mqtt" node, so it sits first in the
      * chain and its help line is printed too. */
-    if (!s_mqx_registered) {
-        ca_cli_register(&s_mqx_node);
-        s_mqx_registered = true;
-    }
+    ca_cli_register_table(&s_mqx_table);   /* a second call is a no-op */
 #endif
     ca_stdout_put_n("MQTT: starting connection...");
     ca_mqtt_service_net_ready();
@@ -334,6 +340,17 @@ static u32 task_mqtt(void *arg)
 
     while (1) {
         u32 now = ca_os_tick_ms();
+
+#if ENABLE_CLI
+        /* 'mqx cycle|conn': the connection is opened here, in a task that
+         * outlives the command (see the bench control block) */
+        if (s_mqx_req != MQX_REQ_NONE) {
+            const bool drop_old = (s_mqx_req == MQX_REQ_CYCLE);
+            s_mqx_req = MQX_REQ_NONE;
+            mqx_restart(drop_old);
+            last_reconnect = now;
+        }
+#endif
 
         if (!ca_mqtt_is_connected()) {
             if (!s_mqx_hold && (now - last_reconnect) >= MQTT_RECONNECT_MS) {

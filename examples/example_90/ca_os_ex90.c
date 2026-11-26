@@ -117,18 +117,10 @@ static void ex90_line(u32 n)
     ca_stdout_put_n(buf);
 }
 
-static bool ex90_cli_handler(c_str *pcmd)
+/* e90 — the line arrives without the command word */
+static bool e90_cmd(c_str *args)
 {
-    c_str cmd = *pcmd;
-    const char *p = ca_skip_sp(cmd->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("e90       : info | period N | stop | start | line N");
-        return false;
-    }
-    if (ca_strncmp(p, "e90", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
-
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "info", 4) == 0) {
         u32 queued, dropped;
         ca_stdout_stats(&queued, &dropped);
@@ -172,7 +164,13 @@ static bool ex90_cli_handler(c_str *pcmd)
     return true;
 }
 
-static ca_cli_node_t s_ex90_cli_node = { ex90_cli_handler, NULL };
+static const ca_cli_cmd_t s_e90_cmds[] = {
+    { "e90", "e90       : info | period N | stop | start | line N", { e90_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_e90_table = {
+    "e90", s_e90_cmds, (u16)(sizeof(s_e90_cmds) / sizeof(s_e90_cmds[0])), NULL
+};
 
 void ca_os_configure(void)
 {
@@ -185,7 +183,7 @@ void ca_os_configure(void)
     ca_cli_create_thread();
 
     ca_usb_dev_mng_cdc_cli();
-    ca_cli_register(&s_ex90_cli_node);
+    ca_cli_register_table(&s_e90_table);
 }
 
 void ca_os_main(void)

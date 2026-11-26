@@ -83,7 +83,7 @@ static const u8 board_ip[4] = { 192U, 168U, 10U, 20U };
 static const ca_eth_cfg_t eth_cfg = {
     .phy_addr = 0U,
     .rmii     = true,
-    .mac      = { .v = { 0x02U, 0x00U, 0x00U, 0x00U, 0x00U, 0x20U } },
+    .mac      = CA_EXAMPLE_MAC(32),
     .link_cb  = on_link_change,
 };
 

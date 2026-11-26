@@ -80,5 +80,20 @@ void ca_ip_defrag_service_start(void);
  */
 void ca_ip_defrag_submit(u16 buf_idx);
 
+/** Reassembly counters ('ip defrag' on the CLI). Each one is written by a
+ *  single task (net or defrag), so they need no lock. */
+typedef struct {
+    u32 frags;       /* fragments accepted into a session                  */
+    u32 complete;    /* datagrams reassembled and injected                 */
+    u32 timeout;     /* sessions dropped incomplete after the timeout      */
+    u32 drop_bad;    /* fragment refused: malformed, too big, contradicts  */
+    u32 drop_full;   /* fragment refused: every session slot busy          */
+    u32 drop_big;    /* reassembled datagram does not fit a net_buf        */
+    u16 partial;     /* sessions open right now (filled by the read)       */
+} ca_ip_defrag_stats_t;
+
+void ca_ip_defrag_stats(ca_ip_defrag_stats_t *out);
+void ca_ip_defrag_stats_reset(void);
+
 #endif /* EN_NET && EN_IP_DEFRAG */
 #endif /* IP_DEFRAG_H_ */

@@ -80,7 +80,7 @@ typedef void (*ca_usb_ncm_rx_buf_cb_t)(u16 buf_idx);
 
 typedef struct {
     ca_usb_device_type_t header;    /* tag + ops (D19) — first field */
-    u16  mps;                        /* Bulk MPS (64 FS); 0 = 64 */
+    u16  mps;                        /* Bulk MPS (64 FS, 512 HS); 0 = per speed (ca_usb_bulk_mps) */
     u8   mac[6];                     /* MAC exposed to the host (iMACAddress) */
     ca_usb_ncm_rx_cb_t on_rx;        /* received Ethernet datagram */
     ca_usb_ncm_rx_buf_cb_t on_rx_buf; /* same, zero copy in a net buffer (optional) */

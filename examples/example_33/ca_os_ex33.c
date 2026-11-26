@@ -43,12 +43,12 @@
 /* ============================================================================
  * Network
  * ============================================================================ */
-static const ca_mac_t  s_mac = { .v = { 0x02U, 0x00U, 0x00U, 0x00U, 0x00U, 0x33U } };
+static const ca_mac_t  s_mac = CA_EXAMPLE_MAC(33);
 static const ca_ipv4_t s_ip  = { .v = { 192U, 168U, 10U, 33U } };
 
 static const ca_net_cfg_t net_cfg = {
     .ip  = { .v = { 192U, 168U, 10U, 33U } },
-    .mac = { .v = { 0x02U, 0x00U, 0x00U, 0x00U, 0x00U, 0x33U } },
+    .mac = CA_EXAMPLE_MAC(33),
     .udp  = { .bindings = {{0}}, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -58,7 +58,7 @@ static void on_link_change(bool up);
 static ca_eth_cfg_t eth_cfg = {
     .phy_addr = 0U,
     .rmii     = true,
-    .mac      = { .v = { 0x02U, 0x00U, 0x00U, 0x00U, 0x00U, 0x33U } },
+    .mac      = CA_EXAMPLE_MAC(33),
     .link_cb  = on_link_change,
     /* rx_cb / error_cb: overwritten by ca_net_init() */
 };

@@ -33,7 +33,15 @@
  * CONFIGURATION CONSTANTS
  * ========================================================================== */
 
-#define MAX_TOTAL_KEY_STORAGE   2048    /* Total size of the key storage area */
+/* Total size of the key storage area (power of 2: one MPU region, aligned to its
+ * size). A software AES context (~560 B, sw_* fields of ca_aes_ctx_t) per session
+ * context of a link needs 4 KB (ex97: two links); with a crypto IP the context is
+ * ~56 B and 2 KB is enough - and the alignment padding in .bss halves too. */
+#if !defined(CRYP_BASE) && !defined(AES_BASE)
+#define MAX_TOTAL_KEY_STORAGE   4096
+#else
+#define MAX_TOTAL_KEY_STORAGE   2048
+#endif
 #define MAX_SECURE_KEYS         20      /* Maximum number of manageable keys */
 #define MIN_KEY_SIZE            16      /* Minimum size for a key (AES uses 16-32 bytes) */
 

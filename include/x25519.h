@@ -41,6 +41,20 @@
 
 #define X25519_KEY_SIZE     32      /* Scalars and points: 32 bytes */
 
+/* Element of GF(2^255 - 19), 10 limbs (radix 2^25.5). Public only because
+ * it is part of the working contexts below; the arithmetic stays private
+ * (crypto/src/fe25519.h). */
+typedef struct {
+    i32 v[10];
+} ca_fe25519_t;
+
+/* X25519 working context, given by the caller (heap, static or its own
+ * state; on the stack it is the fast choice on H7/F7). Wiped on return. */
+typedef struct {
+    u8           e[32];                 /* clamped scalar */
+    ca_fe25519_t x1, x2, z2, x3, z3, tmp0, tmp1;
+} ca_x25519_ctx_t;
+
 /* ============================================================================
  * PUBLIC API — X25519
  * ========================================================================== */
@@ -57,14 +71,14 @@
  * @return true if the output is not all zeros (small order point),
  *         false otherwise: in a handshake, the result must be rejected.
  */
-bool ca_x25519(u8 *out, const u8 *scalar, const u8 *point);
+bool ca_x25519(ca_x25519_ctx_t *ctx, u8 *out, const u8 *scalar, const u8 *point);
 
 /**
  * @brief Public key from base point: out = scalar * 9.
  * @param out    Public key, 32 bytes
  * @param scalar Private scalar, 32 bytes
  */
-void ca_x25519_base(u8 *out, const u8 *scalar);
+void ca_x25519_base(ca_x25519_ctx_t *ctx, u8 *out, const u8 *scalar);
 
 /* Field arithmetic (fe25519_*, shared with Ed25519): crypto/src/fe25519.h,
  * private to the crypto sources. */

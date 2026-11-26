@@ -33,15 +33,15 @@
  *   - USB CDC for alternative output
  *
  * CLI Commands:
- *   crc32      — Calculate CRC32 on test buffer
+ *   crc        — Calculate CRC32 on test buffer (crc32 = driver command)
  *   hash       — Calculate one-shot SHA-256
  *   hash_mt    — Concurrent HASH test (2 threads)
  *   aes        — AES-256 ECB encrypt/decrypt test
  *   aes_gcm    — AES-256 GCM test (authenticated encryption)
  *   aes_mt     — Concurrent AES test (2 threads)
  *   derive     — Derive key: IV+KEY -> SHA256 -> 32-byte key
- *   kstore     — Key-store test: save/retrieve protected key
- *   full       — Executes the entire sequence: derive + kstore + aes_gcm
+ *   kstest     — Key-store test: save/retrieve protected key (kstore = driver)
+ *   full       — Executes the entire sequence: derive + kstest + aes_gcm
  *   help       — List available commands
  *
  * STDOUT Log (every 10 s):
@@ -661,9 +661,11 @@ static void example_key_store(void) {
  * TEST — run every check in sequence and report one verdict
  * ========================================================================== */
 
+static bool example_sha384_kat(void);
+
 static void run_all_tests(void)
 {
-    struct { const char *name; bool ok; } r[9];
+    struct { const char *name; bool ok; } r[10];
     u32 n = 0, failed = 0;
 
     ca_stdout_put_n("");
@@ -671,7 +673,7 @@ static void run_all_tests(void)
     ca_stdout_put_n("            EX26 TEST SUITE - running all              ");
     ca_stdout_put_n("========================================================");
 
-    r[n].name = "crc32";    r[n].ok = example_crc32();            n++;
+    r[n].name = "crc";      r[n].ok = example_crc32();            n++;
     ca_os_sleep(200);
     r[n].name = "hash";     r[n].ok = example_hash_oneshot();     n++;
     ca_os_sleep(200);
@@ -692,13 +694,15 @@ static void run_all_tests(void)
     )
     n++;
     ca_os_sleep(200);
+    r[n].name = "sha384";   r[n].ok = example_sha384_kat();       n++;
+    ca_os_sleep(200);
 
     /* derive + kstore: judged by the state they are supposed to leave behind */
     example_key_derivation();
     r[n].name = "derive";   r[n].ok = (g_derived_key_ready != 0U);  n++;
     ca_os_sleep(200);
     example_key_store();
-    r[n].name = "kstore";   r[n].ok = (g_secure_key_area != NULL);  n++;
+    r[n].name = "kstest";   r[n].ok = (g_secure_key_area != NULL);  n++;
 
     ca_stdout_put_n("");
     ca_stdout_put_n("--------------------------------------------------------");
@@ -764,37 +768,216 @@ static void example_full_demo(void) {
 }
 
 /* ============================================================================
- * CLI — chain of responsibility
+ * CLI — command table
  * ========================================================================== */
 
-static bool user_cli_handler(c_str *pcmd);
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
-
-static bool user_cli_handler(c_str *pcmd)
+/* SHA-384 and HMAC-SHA384 known answers: FIPS 180-4 (empty, "abc", the
+ * 112-byte two-block message, one million 'a') and RFC 4231 cases 1, 2 and 6
+ * (key longer than the block). They back TLS_AES_256_GCM_SHA384. */
+static bool kat(const char *name, const u8 *got, const char *hex)
 {
-    c_str cmd = *pcmd;
-    const char *p = ca_skip_sp(cmd->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("ex26      : test (all, with verdict) | full (derive+kstore+gcm)");
-        CLI_PUT_N("            crc32 | hash | hash_mt | aes | aes_gcm | aes_mt");
-        CLI_PUT_N("            aes_nist (GCM+ECB KAT) | derive | kstore");
-        CLI_PUT_N("            rng get  (driver command)");
-        return false;
+    bool ok = true;
+    for (u32 i = 0U; i < 48U; i++) {
+        u32 hi = (u32)(hex[2U * i] <= '9' ? hex[2U * i] - '0' : hex[2U * i] - 'a' + 10);
+        u32 lo = (u32)(hex[2U * i + 1U] <= '9' ? hex[2U * i + 1U] - '0' : hex[2U * i + 1U] - 'a' + 10);
+        if (got[i] != (u8)((hi << 4) | lo)) ok = false;
     }
-    if (ca_strncmp(p, "crc32", 5) == 0)   { example_crc32();              return true; }
-    if (ca_strncmp(p, "hash_mt", 7) == 0) { example_hash_multithread();   return true; }
-    if (ca_strncmp(p, "hash", 4) == 0)    { example_hash_oneshot();       return true; }
-    if (ca_strncmp(p, "aes_nist", 8) == 0) { EVAL_AES_GCM_SW_TEST((void)ca_aes_gcm_selftest(); (void)ca_aes_ecb_selftest();) return true; }
-    if (ca_strncmp(p, "aes_gcm", 7) == 0) { example_aes_gcm();            return true; }
-    if (ca_strncmp(p, "aes_mt", 6) == 0)  { example_aes_multithread();    return true; }
-    if (ca_strncmp(p, "aes", 3) == 0 && (p[3] == 0 || p[3] == ' ')) { example_aes_ecb(); return true; }
-    if (ca_strncmp(p, "derive", 6) == 0)  { example_key_derivation();     return true; }
-    if (ca_strncmp(p, "kstore", 6) == 0)  { example_key_store();          return true; }
-    if (ca_strncmp(p, "test", 4) == 0)    { run_all_tests();              return true; }
-    if (ca_strncmp(p, "full", 4) == 0)    { example_full_demo();          return true; }
-    return false;
+    ca_stdout_printf_n("  %-22s %s", name, ok ? "PASS" : "FAILED");
+    return ok;
 }
+
+static bool example_sha384_kat(void)
+{
+#if EN_SHA512
+    static const char two_blocks[] =
+        "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmno"
+        "ijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu";
+    static ca_sha512_ctx_t ctx;                 /* ~860 B: not on the CLI stack */
+    static u8 key[131];
+    u8 d[48];
+    bool ok = true;
+
+    ca_stdout_put_n("=== SHA-384 / HMAC-SHA384 (FIPS 180-4, RFC 4231) ===");
+    ca_sha384_init(&ctx); ca_sha384_final(&ctx, d);
+    ok &= kat("sha384 empty", d, "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b");
+    ca_sha384_init(&ctx); ca_sha512_update(&ctx, (const u8 *)"abc", 3U); ca_sha384_final(&ctx, d);
+    ok &= kat("sha384 abc", d, "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7");
+    ca_sha384_init(&ctx); ca_sha512_update(&ctx, (const u8 *)two_blocks, 112U); ca_sha384_final(&ctx, d);
+    ok &= kat("sha384 two blocks", d, "09330c33f71147e83d192fc782cd1b4753111b173b3b05d22fa08086e3b0f712fcc7c71a557e2db966c3e9fa91746039");
+    {
+        u8 a[100];
+        ca_memset(a, 'a', sizeof a);
+        ca_sha384_init(&ctx);
+        for (u32 i = 0U; i < 10000U; i++) ca_sha512_update(&ctx, a, sizeof a);
+        ca_sha384_final(&ctx, d);
+    }
+    ok &= kat("sha384 1M 'a'", d, "9d0e1809716474cb086e834e310a4a1ced149e9c00f248527972cec5704c2a5b07b8b3dc38ecc4ebae97ddd87f3d8985");
+
+    ca_memset(key, 0x0BU, 20U);
+    ca_hmac_sha384_ctx(&ctx, key, 20U, (const u8 *)"Hi There", 8U, d);
+    ok &= kat("hmac rfc4231 #1", d, "afd03944d84895626b0825f4ab46907f15f9dadbe4101ec682aa034c7cebc59cfaea9ea9076ede7f4af152e8b2fa9cb6");
+    ca_hmac_sha384_ctx(&ctx, (const u8 *)"Jefe", 4U, (const u8 *)"what do ya want for nothing?", 28U, d);
+    ok &= kat("hmac rfc4231 #2", d, "af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47e42ec3736322445e8e2240ca5e69e2c78b3239ecfab21649");
+    ca_memset(key, 0xAAU, 131U);
+    ca_hmac_sha384_ctx(&ctx, key, 131U,
+                       (const u8 *)"Test Using Larger Than Block-Size Key - Hash Key First", 54U, d);
+    ok &= kat("hmac rfc4231 #6", d, "4ece084485813e9088d2c63a041bc5b44f9ef1012a2b588f3cd11f05033ac4c60c2ef6ab4030fe8296248df163f44952");
+    ca_stdout_printf_n("SHA-384 KAT: %s", ok ? "PASS (7/7)" : "FAILED");
+    return ok;
+#else
+    ca_stdout_put_n("SHA-384 KAT: built without EN_SHA512");
+    return true;
+#endif
+}
+
+/* AES-GCM throughput: what a TLS (VeNCrypt) VNC stream would cost. Each
+ * call sets a new IV like a TLS record; blocks of 1, 2 (TLS_TX_RECORD of
+ * caOS), 4 and 16 KB; AES-128 (TLS 1.3) and AES-256 (SSH). ~300 ms each. */
+static void example_aes_bench(void)
+{
+    static u8 in[16384], out[16384];
+    static const u32 sizes[4] = { 1024U, 2048U, 4096U, 16384U };
+    u8 key[32], iv[16], tag[16], aad[5] = { 23U, 3U, 3U, 0U, 0U };
+    for (u32 i = 0U; i < sizeof in; i++) in[i] = (u8)(i * 13U);
+    for (u32 i = 0U; i < 32U; i++) key[i] = (u8)(i + 1U);
+    ca_memset(iv, 0U, sizeof iv);
+    for (u32 k = 0U; k < 2U; k++) {
+        const ca_aes_keysize_t ks = (k == 0U) ? CA_AES_KEY_128 : CA_AES_KEY_256;
+        for (u32 j = 0U; j < 4U; j++) {
+            ca_aes_ctx_t ctx;
+            if (!ca_aes_ctx_setup(&ctx, CA_AES_MODE_GCM, ks, key, iv)) {
+                ca_stdout_printf_n("AES BENCH %u-bit: setup failed", k ? 256U : 128U);
+                break;
+            }
+            u32 n = 0U;
+            const u32 t0 = ca_os_tick_ms();
+            u32 dt = 0U;
+            do {
+                iv[11] = (u8)n;
+                if (!ca_aes_ctx_set_iv(&ctx, iv) ||
+                    !ca_aes_gcm_encrypt(&ctx, aad, 5U, in, out, sizes[j], tag)) { n = 0U; break; }
+                n++;
+                dt = ca_os_tick_ms() - t0;
+            } while (dt < 300U);
+            const u32 kbps = (dt > 0U) ? (n * sizes[j]) / dt : 0U;     /* bytes/ms = KB/s */
+            ca_stdout_printf_n("AES BENCH GCM-%u %5u B: %u calls in %u ms = %u KB/s",
+                               k ? 256U : 128U, sizes[j], n, dt, kbps);
+        }
+    }
+}
+
+
+/* one entry per command word; each gets the line without its word */
+static bool crc_cmd(c_str *args)
+{
+    (void)args;
+    example_crc32();
+    return true;
+}
+
+static bool hash_mt_cmd(c_str *args)
+{
+    (void)args;
+    example_hash_multithread();
+    return true;
+}
+
+static bool hash_cmd(c_str *args)
+{
+    (void)args;
+    example_hash_oneshot();
+    return true;
+}
+
+static bool aes_nist_cmd(c_str *args)
+{
+    (void)args;
+    EVAL_AES_GCM_SW_TEST((void)ca_aes_gcm_selftest();
+    (void)ca_aes_ecb_selftest();) return true;
+}
+
+static bool aes_bench_cmd(c_str *args)
+{
+    (void)args;
+    example_aes_bench();
+    return true;
+}
+
+static bool sha384_cmd(c_str *args)
+{
+    (void)args;
+    (void)example_sha384_kat();
+    return true;
+}
+
+static bool aes_gcm_cmd(c_str *args)
+{
+    (void)args;
+    example_aes_gcm();
+    return true;
+}
+
+static bool aes_mt_cmd(c_str *args)
+{
+    (void)args;
+    example_aes_multithread();
+    return true;
+}
+
+static bool aes_cmd(c_str *args)
+{
+    (void)args;
+    example_aes_ecb();
+    return true;
+}
+
+static bool derive_cmd(c_str *args)
+{
+    (void)args;
+    example_key_derivation();
+    return true;
+}
+
+static bool kstest_cmd(c_str *args)
+{
+    (void)args;
+    example_key_store();
+    return true;
+}
+
+static bool test_cmd(c_str *args)
+{
+    (void)args;
+    run_all_tests();
+    return true;
+}
+
+static bool full_cmd(c_str *args)
+{
+    (void)args;
+    example_full_demo();
+    return true;
+}
+
+static const ca_cli_cmd_t s_user_cmds[] = {
+    { "crc", "crc       : CRC32 hardware test (crc32 is the driver command)", { crc_cmd, STACK_LARGE } },
+    { "hash_mt", "hash_mt   : SHA-256 from several tasks at once", { hash_mt_cmd, STACK_LARGE } },
+    { "hash", "hash      : SHA-256 known-answer test", { hash_cmd, STACK_LARGE } },
+    { "aes_nist", "aes_nist  : AES GCM+ECB known-answer tests", { aes_nist_cmd, STACK_LARGE } },
+    { "aes_bench", "aes_bench : AES-GCM throughput, KB/s", { aes_bench_cmd, STACK_LARGE } },
+    { "sha384", "sha384    : SHA-384 / HMAC known-answer test", { sha384_cmd, STACK_LARGE } },
+    { "aes_gcm", "aes_gcm   : AES-GCM encrypt/decrypt test", { aes_gcm_cmd, STACK_LARGE } },
+    { "aes_mt", "aes_mt    : AES from several tasks at once", { aes_mt_cmd, STACK_LARGE } },
+    { "aes", "aes       : AES-ECB/CBC test", { aes_cmd, STACK_LARGE } },
+    { "derive", "derive    : key derivation test", { derive_cmd, STACK_LARGE } },
+    { "kstest", "kstest    : key store test (kstore is the driver command)", { kstest_cmd, STACK_LARGE } },
+    { "test", "test      : all the tests, with a verdict", { test_cmd, STACK_LARGE } },
+    { "full", "full      : derive + kstest + gcm", { full_cmd, STACK_LARGE } },
+};
+
+static ca_cli_table_t s_user_table = {
+    "user", s_user_cmds, (u16)(sizeof(s_user_cmds) / sizeof(s_user_cmds[0])), NULL
+};
 
 /* ============================================================================
  * TASK MONITOR
@@ -878,7 +1061,7 @@ void ca_os_main(void) {
     ca_os_job("monitor", CA_TH_LEVEL3, task_monitor, NULL, STACK_MEDIUM, CA_JOB_STD, CA_FAULT_RESTART_THREAD);
 
     /* Register CLI */
-    EVAL_CLI( ca_cli_register(&s_user_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_user_table); )
 
     /* Start scheduler */
     ca_os_run(true);

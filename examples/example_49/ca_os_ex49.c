@@ -48,7 +48,7 @@
 /* ============================================================================
  * Network
  * ============================================================================ */
-static const ca_mac_t s_mac = { .v = { 0x02U, 0x00U, 0x00U, 0x00U, 0x00U, 0x49U } };
+static const ca_mac_t s_mac = CA_EXAMPLE_MAC(49);
 
 static volatile ca_ipv4_t s_ip        = { .addr = 0U };
 static volatile bool   s_dhcp_done = false;
@@ -58,7 +58,7 @@ static void on_link_change(bool up);
 static ca_eth_cfg_t eth_cfg = {
     .phy_addr = 0U,
     .rmii     = true,
-    .mac      = { .v = { 0x02U, 0x00U, 0x00U, 0x00U, 0x00U, 0x49U } },
+    .mac      = CA_EXAMPLE_MAC(49),
     .link_cb  = on_link_change,
 };
 
@@ -113,7 +113,7 @@ static void on_dhcp_expire(void)
  * ============================================================================ */
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .addr = 0U },
-    .mac  = { .v = { 0x02U, 0x00U, 0x00U, 0x00U, 0x00U, 0x49U } },
+    .mac  = CA_EXAMPLE_MAC(49),
     .udp  = { .bindings = { {0U, NULL} }, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -242,15 +242,10 @@ static u32 task_dual(void *arg)
     return 0U;
 }
 
-static bool ex49_cli_handler(c_str *pcmd)
+/* e49 — the line arrives without the command word */
+static bool e49_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("e49       : dual <ip>  (PUT 32 KB alone, then during a slow GET)");
-        return false;
-    }
-    if (ca_strncmp(p, "e49", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "dual", 4) != 0) { CLI_PUT_N("e49: dual <ip>"); return true; }
     p = ca_skip_sp(p + 4);
     ca_ipv4_t ip;
@@ -262,7 +257,13 @@ static bool ex49_cli_handler(c_str *pcmd)
     return true;
 }
 
-static ca_cli_node_t s_ex49_cli_node = { ex49_cli_handler, NULL };
+static const ca_cli_cmd_t s_e49_cmds[] = {
+    { "e49", "e49       : dual <ip>  (PUT 32 KB alone, then during a slow GET)", { e49_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_e49_table = {
+    "e49", s_e49_cmds, (u16)(sizeof(s_e49_cmds) / sizeof(s_e49_cmds[0])), NULL
+};
 
 /* ============================================================================
  * Heartbeat + ETH monitor
@@ -338,7 +339,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_ex49_cli_node);
+        ca_cli_register_table(&s_e49_table);
     )
     ca_sem_init(&s_dual_go,      "E49GO", 0U, 1U);
     ca_sem_init(&s_dual_done,    "E49DN", 0U, 2U);

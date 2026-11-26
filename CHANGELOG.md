@@ -4,8 +4,464 @@ Fixes and changes to the caOS sources that a user can notice, newest first.
 One entry per fix: date, area, what changed for the user. The details are in
 the git history; documentation-only changes are not listed.
 
-Entries about features of the full edition only (CAN, USB HS, tamper, FMAC)
-start with `<!-- paid -->`: they are removed from the FREE package.
+Entries about what the FREE edition leaves off (CAN, MicroPython) start
+with `<!-- paid -->`: they are removed from the FREE package.
+
+## Unreleased
+
+### Changed
+- 2026-11-26  FREE edition: same drivers as the full edition. Tamper, FMAC,
+  HTTPS/TLS 1.3, ECDSA P-256, VNC over TLS, ChaCha20-Poly1305 and BLAKE2s
+  are now in the FREE libraries; the only limits left are the fixed
+  os_config.h and half the heap. CAN, USB HS and MicroPython stay off
+  (LIMITS.md says why).
+- 2026-11-26  USB: the serial number string is `<MCU_ID>-<USB_STR_SERIAL>`
+  (e.g. `0753-0001` on H753), no longer `0001` on every board: two caOS
+  devices on one PC now get distinct /dev/serial/by-id names and udev links.
+- 2026-11-24  examples: the network examples' MAC depends on the board too:
+  `02:<role>:<MCU_ID>:<example>` in decimal digits (ex149 on H753 =
+  `02:CA:07:53:01:49`), from one macro, `CA_EXAMPLE_MAC(n)` in net_cfg.h.
+  Two boards running the same example on one switch no longer share a MAC
+  and a lease. Role CA = the board, CB = a relay's NCM side, CC = the PC
+  side of a USB-NCM link (the PC's interface is now `enx02cc...`).
+  Examples with a static IP keep it.
+- 2026-11-24  CLI: `config` lists every os_config.h symbol the project
+  defines (it showed 169 of 261), under its real name (`EN_TCP_SERVICE`,
+  not `tcp`), then the board's values from objmap.h; long texts are cut.
+  `ca_caos_config_hash()` covers the same rows. The command's table and the
+  hash are built only with `EN_CLI_CONFIG`: the other firmwares no longer
+  carry them. `ca_caos_config_status` and `ca_caos_get_config()` are gone
+  (a partial copy, 219 of 261 symbols, read by nobody): the configuration
+  is read with `ca_caos_config_rows()`, two builds are compared with a diff
+  of their `config` output.
+- 2026-11-23  build: caOS links without newlib (`-nostdlib`, libgcc only for
+  64-bit division). `memcpy`, `memset`, `memmove`, `memcmp`, `strlen`,
+  `strcmp`, `strncmp`, `strchr` - the calls GCC emits by itself and the ones
+  LVGL, FatFs and TinyUSB make - come from caOS (`libc_shim.c`, on the `ca_*`
+  functions of memaux), declared by caOS's own `string.h`. Any other C
+  library call is now a link error instead of newlib code in the image. The
+  newlib stubs `sysmem.c` and `syscalls.c` are gone.
+- 2026-11-22  kernel: the idle, stdout and cli tasks take STACK_SMALL (cli
+  keeps STACK_MEDIUM on F103), sized on their measured peaks: 6 KB more free
+  stack arena on F767, H773, H7, U5 and H5 (F4 unchanged). The banner task is
+  created last, just before the scheduler starts: it no longer leaves a 2 KB
+  hole in the arena when it ends.
+
+### Fixed
+- 2026-11-26  net: with IP fragmentation on, a task sending while the
+  fragmentation queue is full now waits for a slot in order (up to 20 ms)
+  instead of being refused at once. Several tasks bursting large datagrams
+  were served unevenly: one could be refused for 200 ms in a row while the
+  others went through (ex136 on H563/F767). Now the longest wait is ~5 ms.
+- 2026-11-26  examples: ex141 on F767/F746 draws a 320x200 screen (was
+  320x240): with the software-AES key store the VNC service found no heap
+  for its buffers and did not start.
+- 2026-11-26  examples: ex11 `dts alarm` ran the DTS/ADC comparison instead
+  of the alarm test since the CLI command tables (22/11): the handler still
+  skipped the command word, which no longer arrives with the line.
+- 2026-11-26  crypto: the key store takes 2 KB again on parts with an AES
+  peripheral (F439, H753, H773); 4 KB only where AES runs in software. The
+  doubling of 21/11 cost ~4 KB of RAM there (array + MPU alignment) and VNC
+  logins on ex139/F439 were refused for lack of heap.
+- 2026-11-24  examples: ex1 waits one second between lines again
+  (`ca_os_delay_ms`): it runs without the scheduler, where `ca_os_sleep()`
+  returns at once, so the Hello line was printed in a burst.
+- 2026-11-23  ADC (F4, F7): ADC3 channels IN4-IN9, IN14, IN15 set ADC1's
+  pins analog instead of their own (PF3-PF10); `ca_adc_stop()` always
+  stopped ADC1.
+- 2026-11-23  CLI: `ca_cli_exec_capture()` could return, at the start of the
+  captured text, output another task had queued just before (the
+  MicroPython REPL's echo, seen in `caos.cli()` on F767): the stdout queue
+  is now drained before the capture starts.
+- 2026-11-23  ADC (H5): the same F4 channel map in `ca_adc_pin_init()` (on
+  the H563, 9 channels of 13 left their pin digital), now the datasheet's.
+  `ca_adc_init()` refuses ADC2: the H5 driver drives ADC1 only, and ADC2 was
+  served by ADC1 without a word.
+- 2026-11-23  ADC (H7): `ca_adc_pin_init()` set the pin of the F4 channel
+  map, so most channels left their real pin digital (channel 4 is PC4, PA4
+  is channel 18 on the H7); now the map is per converter, from the
+  datasheet. `ca_adc_stop()` always stopped ADC1, whatever the number given.
+  ADC3, which the temperature sensor holds from boot, could not be used by
+  the ADC driver (`ca_adc_init(3)` failed): the driver now shares it - no
+  recalibration of an enabled ADC, only its own channels' settings - and a
+  temperature reading puts the resolution back as it found it. Writes to the
+  ADC control register keep the linearity-calibration bits: clearing them
+  hung the conversion.
+- 2026-11-23  FAT: `EN_FAT` without `EN_RTC` did not compile (`get_fattime()`
+  used the RTC driver even with `FF_FS_NORTC 1`, where FatFS never calls it).
+- 2026-11-22  LVGL/VNC: the gui task and the VNC task with TLS take the
+  first stack size that reaches their 8 KB floor; on F767 and H773 they
+  skipped the 8 KB step and took 10 KB each. On H773 ex141 the CLI commands
+  were refused (`busy: no stack`) for lack of arena; now they run.
+
+### Added
+- 2026-11-26  crypto: ChaCha20, HChaCha20, Poly1305, ChaCha20-Poly1305
+  (96-bit nonce of RFC 8439 and the 64-bit nonce of WireGuard) and
+  XChaCha20-Poly1305 (`EN_CHACHA20_POLY1305`); BLAKE2s (RFC 7693) and
+  HMAC-BLAKE2s (`EN_BLAKE2S`). Software, the same on every family; the
+  working state is the caller's context. Known-answer tests in example 66,
+  CLI `chacha test|speed` and `blake2s test|speed`. MicroPython:
+  `caos.crypto.chacha20poly1305_encrypt/_decrypt` (nonce as int, 12 or 24
+  bytes), `blake2s`, `hmac_blake2s`, keys by keystore index too.
+- 2026-11-23  fat_service: handle API for programs, with no printing -
+  `ca_fat_fopen/fread/fwrite/fseek/ftell/fsize/fsync/fclose`, directories
+  (`ca_fat_dopen/dread/dclose`), `ca_fat_pstat`, `ca_fat_pmkdir`,
+  `ca_fat_punlink`, `ca_fat_prename`, `ca_fat_statvfs`. The FIL/DIR objects
+  are on the caller's task heap, never on a stack.
+- 2026-11-23  udp_client: `ca_udp_client_sendto()` (any destination) and
+  `ca_udp_client_recvfrom()` (gives the sender); a client opened with
+  `server_ip` 0 is bound to its local port only.
+- 2026-11-23  tcp_service: `ca_tcp_peer()` gives the remote address and port
+  of a connection (e.g. after `ca_tcp_accept()`).
+- 2026-11-23  memaux: `ca_memmove()` (overlapping areas) and `ca_strchr()`.
+- 2026-11-23  console: a task can take the console from the CLI and read it a
+  character at a time (`ca_console_take`, `ca_console_getc`,
+  `ca_console_give`), with an optional ISR filter for Ctrl-C. The RX ring is
+  `CONSOLE_RX_BUF_SIZE` bytes (default 256). A console left to a task that
+  ended is given back to the CLI by the next byte. Example 144.
+- 2026-11-22  CLI: command tables (`ca_cli_register_table`, `ca_cli_find`);
+  the built-in commands are the first table, `help` prints one line per
+  command (now including `help` itself). Temporary `find_cmd <line>` runs a
+  line through the tables only (exact word match), for the migration.
+  Built-ins are matched by the exact word (`topx` is no longer `top`);
+  `callto` is the first module on a table.
+- 2026-11-22  CLI: every caOS module command (drivers, net, crypto) is on a
+  command table. A missing or unknown subcommand prints the command's help
+  line (it used to print a per-module message, or `huh!`). Each command has
+  one help line, wrapped at its ` | ` separators past 100 characters (long
+  lines used to arrive cut, `~OVF`). `ed25519`, `p256` and `tftp` run in a
+  task with their own stack; with every command slot busy they answer
+  `busy: no stack for '<cmd>', retry` instead of running on the cli stack.
+- 2026-11-22  CLI: the console never waits on a command: only near-instant
+  commands (< 50 ms) run inside the cli task, the others (network waits,
+  self-tests, flash/SD, `top`) in a task named after the command. The same
+  command typed again while it runs answers `busy: '<cmd>' already running`.
+  After every command the cli wipes its copies of the line (passwords).
+- 2026-11-22  CLI: `ca_cli_capture_next(fn)` hands the next whole line to
+  `fn` (prompts: passwords, menus). Every example and workspace app is on a
+  command table, one entry per command word.
+- 2026-11-20  Workspace: app_6 "Comet Guard", a fixed shooter played over VNC
+  (TLS + login) on the H753: double-buffered 320x240 framebuffer at 30 fps,
+  status line drawn by LVGL on a framebuffer of its own, keys from the viewer
+  or from the console (`left`, `right`, `fire`, `shield`, `credit`), `app6 stats`.
+- 2026-11-20  Examples: ex143 splits AES-GCM into its phases (key setup, fixed
+  cost, AES rounds, GHASH, whole GCM) and times each with the DWT cycle counter,
+  16 B to 4 KB, AES-128 and AES-256 (`e143 run`, `e143 test` with a verdict).
+  H563 software: GHASH is 84% of the GCM time.
+- 2026-11-19  fb: double buffer. `ca_fb_create(..., 2)` falls back to one buffer
+  when two do not fit; the application draws in A, `ca_fb_present()` (called by
+  the LVGL port at each frame end) copies A to B at most every `FB_COPY_MS`,
+  and the reader (VNC) reads B from `ca_fb_info().base`: never half a frame.
+  Copy by DMA2D (whole screen, 0.5 ms on H753) or by CPU (changed tiles).
+- 2026-11-19  Examples: ex142, example 141 (LVGL over VNC, TLS + login) over
+  USB-NCM Full Speed instead of Ethernet. H753: interface in use ~0.3 MB/s as
+  on Ethernet, a full 480x272 redraw 0.26 s (16 bpp) / 0.5 s (32 bpp).
+- 2026-11-19  fb: dirty map. Every drawing call marks the 16x16 tiles it touches;
+  `ca_fb_take_dirty()` hands them to one reader (the VNC service),
+  `ca_fb_mark_dirty()` marks pixels written another way (DMA, a cast of base).
+- 2026-11-19  VNC: login for TLS sessions (VeNCrypt X509Plain, user and password
+  inside TLS, TigerVNC's default). The board keeps only a PBKDF2-SHA256 hash
+  (`ca_vnc_cfg_t.cred`, made by `tools/gen_vnc_cred.py`); after a wrong
+  password the next client waits 1 s, doubling up to 30 s. `vnc info` counts
+  logins. Examples 139/141: user `caos`, password `caos-vnc-demo`.
+- 2026-11-19  Config: `TCP_REAP_MS` and `UDP_REAP_MS` (default 1000 ms) set
+  how often the TCP and UDP resources of ended tasks are closed.
+- 2026-11-18  FREE edition: framebuffer (`fb`), the VNC server (plain RFB) and
+  LVGL are included; the heap cap of F439 and H773 is half of their heap like
+  the other boards (it was 64 KB). Graphics examples sized for the full heap
+  may not fit and say so at boot (LIMITS.md).
+- 2026-11-18  GFX: `ca_lvgl_stop()` ends LVGL and gives back all of its heap
+  (pool, draw buffer, extra heap); `ca_lvgl_start()` can run again. ex141:
+  `e141 stop` / `e141 start`.
+- 2026-11-18  Examples: ex141 (LVGL over VNC) runs on parts without a DMA2D
+  too, with LVGL's software renderer: H563 (plain RFB, 320x240).
+- 2026-11-18  GFX: LVGL text goes to the DMA2D too: each glyph is blended with
+  the text colour, polled (5-7% faster per text frame on F439 F767 H753 U575).
+  On by default; `ca_lvgl_dma2d_text(min_px)` sets a size threshold or
+  `CA_LVGL_TEXT_OFF`. ex140: `e140 text` measures it.
+- 2026-11-17  GFX: `ca_lvgl_start()` runs LVGL in its own task on an RGB565
+  framebuffer (partial buffer flushed with `ca_fb_blit`, pointer and keypad
+  input, optional software cursor, DMA2D unit). Other tasks feed input with
+  `ca_lvgl_input_pointer/key()` and run code on LVGL objects with
+  `ca_lvgl_call()`. ex141: an LVGL screen (buttons, text area, on-screen
+  keyboard) served over VNC, driven by the viewer's mouse and keyboard.
+- 2026-11-17  Drivers: `fb` gets the RGB565 format (`CA_FB_FMT_RGB565`, 2 bytes
+  per pixel) and `ca_fb_blit()` (copy a block of pixels, clipped, under the
+  owner check). Drawing colours are now `u32`: an index for L8, an RGB565
+  word for RGB565 (callers passing an index are unchanged).
+- 2026-11-17  NET: VNC serves RGB565 framebuffers too; `ca_vnc_proto_update()`
+  takes the source format (`CA_VNC_PIX_L8` / `CA_VNC_PIX_RGB565`). ex139:
+  `e139 fmt l8|rgb565`.
+- 2026-11-17  GFX: LVGL v9.6 (external/lvgl, MIT) built and linked as `liblvgl.a`;
+  configuration in `external/caos_lvgl/lv_conf.h` (RGB565). On parts with a
+  DMA2D (F439, F767, H753, H773, U575) `ca_lvgl_dma2d_init()` adds a drawing
+  unit on `ca_dma2d`: fills and plain bitmaps go to the DMA2D, the rest stays
+  in software (about -23% per frame). ex140 compares the two renderers.
+- 2026-11-17  NET: encrypted VNC (`EN_VNC_TLS`): VeNCrypt X509None, the whole
+  session over TLS 1.3 (AES-256-GCM-SHA384). `cfg.security` AUTO (default)
+  picks TLS where the part has AES in hardware (`ca_aes_is_hw()`, from the
+  CMSIS header: H753, H773, F439), plain RFB and forced view only elsewhere;
+  TLS and NONE force the choice. ex139 serves its pattern this way
+  (`e139 sec`), `vnc_check.py` speaks VeNCrypt.
+- 2026-11-17  TLS: TLS_AES_256_GCM_SHA384 (with `EN_SHA512`), preferred when the
+  client offers it, TLS_AES_128_GCM_SHA256 otherwise; `https info` shows the
+  last negotiated suite. New `ca_sha384*` and `ca_hmac_sha384*`. ex26 gets
+  `sha384` (FIPS 180-4 and RFC 4231 vectors); the HTTPS examples (ex45, ex80,
+  ex129) turn `EN_SHA512` on.
+- 2026-11-17  NET: VNC server (`EN_VNC_SERVICE`, RFB 3.3/3.7/3.8, Raw) showing
+  an `fb` framebuffer to one client on port 5900, in the client's pixel format
+  (8/16/32 bpp). Only what changed is sent, found by tile hashes: drawing code
+  does not report its changes. View only by default; input reaches
+  `on_key`/`on_pointer` with its source (VNC client, local hardware or another
+  connection through `ca_vnc_inject_key/pointer()`); client input can be
+  switched at any time with `ca_vnc_service_set_client_input()`. Destroying the
+  service gives back the framebuffer and all its buffers. No security: trusted
+  networks only.
+- 2026-11-17  Examples: ex26 `aes_bench`, AES-GCM throughput (128 and 256 bit,
+  1-16 KB blocks): about 43 MB/s with the H753 CRYP.
+- 2026-11-17  Examples: ex139, VNC server on a test pattern;
+  `vnc_check.py` is the PC side.
+- 2026-11-17  Drivers: framebuffer `fb` (`EN_FB`), an L8 canvas in heap RAM with a
+  256-color palette. Handles with generation; the service that shows it takes it
+  with `ca_fb_take()` and it dies with that task; drawing (`ca_fb_fill_rect`,
+  `ca_fb_set_pixel`, ...) is clipped and refused once the owner is gone.
+- 2026-11-17  Examples: ex138, the framebuffer on the CLI (`fb test` self-test),
+  sized for each MCU from 200x100 to 640x480. First step of the VNC service.
+- 2026-11-17  NET: static path MTU per next hop, for a radio modem/router on
+  the LAN: `ip pmtu <mac> <mtu>` (or `ca_net_pmtu_set()`, two entries) cuts
+  the frames sent to that MAC to the given MTU (`EN_IP_FRAG`) and lowers the
+  TCP MSS of the connections through it, also those already open.
+- 2026-11-17  NET: `ip defrag [reset]` in the CLI shows the reassembly counters
+  (open sessions, fragments, completed datagrams, timeouts, drops by cause);
+  `ca_ip_defrag_stats()` / `ca_ip_defrag_stats_reset()` give them to code.
+- 2026-11-17  Examples: ex137, a TCP connection that lives through an MTU drop
+  (`ip mtu 512` while it is open, between two echoes or mid transfer);
+  `tcp_mtu_drop.py` is the PC side.
+- 2026-11-17  Examples: ex136, IP fragmentation on TX under load. Up to four
+  board tasks burst UDP datagrams at the PC through `ca_udp_client` while
+  `ip mtu` simulates a radio link; `e136 start` runs one pass and prints a
+  verdict, `frag_rx_pc.py` checks every datagram on the PC side.
+- 2026-11-16  NET: IPv4 fragmentation on transmit for links with a reduced
+  MTU (`EN_IP_FRAG`, start it with `ca_ip_frag_service_start()`). Any datagram
+  larger than the MTU of the interface it leaves from is cut into fragments by
+  a service task; frames that fit go straight out as before. New
+  `ca_net_iface_set_mtu()` / `ca_net_iface_mtu()`, and `ip mtu [iface] <N>` in
+  the CLI to simulate a radio link on ETH or NCM; `ip stats` shows the
+  fragmentation counters. ex48 and ex81 turn it on. A TCP connection already
+  open when the MTU drops keeps working: new segments follow the current MTU
+  and an old-size retransmission is fragmented rather than dropped (ex137).
+- 2026-11-15  USB CDC: pull reception. Set `on_rx_ready` in the CDC config and
+  read with `ca_usb_cdc_read()` from a task: unread data stays in the driver
+  queue and the host is held off (NAK), so a fast stream is slowed down instead
+  of losing bytes. The old `on_rx` callback (bytes delivered in the ISR, no
+  back-pressure) still works; ex52 and ex56 now use the pull mode.
+- 2026-11-15  USB: `ca_usb_bulk_mps(usb_num)` returns the bulk packet size of
+  the negotiated speed (64 at full speed, 512 at high speed). The CDC class uses
+  it when its config leaves `mps = 0`; so do the custom, MSC and NCM classes
+  (before, `mps = 0` meant 64 in all of them).
+- 2026-11-15  USB HS: high-speed device driver for the NUCLEO-H7S3L8
+  (OTG_HS with the integrated PHY, 480 Mbit/s, `EN_USB_HS=1`). With `EN_USB_HS`
+  the device answers DEVICE_QUALIFIER and builds its config descriptor for the
+  negotiated speed. New examples: ex109 (vendor loopback, the HS twin of ex50,
+  PID 0x0101) and ex110 (CDC-ACM, the HS twin of ex52, PID 0x0113).
+- 2026-11-15  USB HS: more high-speed twins on the NUCLEO-H7S3L8 -
+  ex111 (custom class, of ex51), ex112 (MSC, of ex53), ex113 (NCM L2, of ex54),
+  ex114 (DFU runtime, of ex57), ex115 (IP stack on NCM, of ex55), ex116 (iperf
+  on NCM, of ex79: 35.7 Mbit/s board->PC, 61.4 Mbit/s PC->board, against 6.5
+  and 5.6 at full speed).
+- 2026-11-16  USB HS: high-speed twins of the remaining NCM and CDC
+  examples on the NUCLEO-H7S3L8, ex117-ex135 (PID = FS twin + 0x0100, own MAC
+  and static IP): ex117 composite CDC+MSC+NCM (of ex56), ex118 CDC console (of
+  ex90), ex119-ex132 network services over NCM (of ex69-ex78, ex80-ex83),
+  ex133-ex135 ETH + NCM (of ex94-ex96).
+
+### Changed
+- 2026-11-22  CLI: the old command chain is gone: `ca_cli_register()`,
+  `ca_cli_node_t`, `ca_cli_set_hook()`/`ca_cli_get_hook()` are removed; use
+  `ca_cli_register_table()`. ex58's own SD commands moved from `fat ...` to
+  `e58 blob|sdtest|test_all|log`.
+- 2026-11-22  Example 26: its own tests are now `crc` and `kstest` (were
+  `crc32` and `kstore`), so the driver commands `crc32 calc` and
+  `kstore info|list` work again in this example.
+- 2026-11-21  Kernel: task stack sizes are fixed values per board, no longer
+  ratios that doubled at every class. F4: 2/2/4/6/8 KB (SMALL was 1 KB),
+  F767/H773: 2/4/6/8/10 KB, H7/U5/H5: 4/6/8/10/12 KB (LARGE was 16 KB, XLARGE
+  and KERNEL 32 KB), F103: 1/2/2/2/2 KB. `STACK_SLICE` in `objmap.h` is the
+  step; `config` shows it.
+- 2026-11-21  Examples: ex12, ex14 and ex15 print their own commands in `help`
+  in the standard `name      : syntax` form, one line per command.
+- 2026-11-20  Kernel: the stack alarm threshold (`STACK WARNING`, 75 %) is now
+  `STACK_WARN_PERMILLE` in each board's `objmap.h`.
+- 2026-11-20  F439: task stack sizes 2/2/4/8 KB (`STACK_SMALL` 1 -> 2 KB): the
+  HTTP task ran at 89 % of 1 KB.
+- 2026-11-20  crypto: software AES-GCM (parts without an AES unit: F446, F767,
+  H563, U575) about 8x faster, results unchanged: GHASH with a 4-bit table,
+  AES rounds with the T-table formulation, both tables in RAM (the parts with a
+  software build have no data cache there: lookups take constant time).
+  H563, 4 KB: GCM-128 191 -> 1789 KB/s, GCM-256 180 -> 1603 KB/s (ex143).
+  `ca_aes_ctx_t` grows by 256 B in software builds (GHASH table per key).
+- 2026-11-20  CLI: a command runs in a `cli_cmd` task with a 4 KB stack floor
+  (the smallest STACK_* covering it) instead of STACK_LARGE: 4 KB instead of
+  8 KB on H773, 16 KB on H753/U575/H563.
+- 2026-11-19  Crypto: every cryptographic function takes its working context from the
+  caller, as first argument, instead of declaring it on the task stack:
+  `ca_sha256/ca_sha512/ca_sha384` (one-shot), `ca_hmac_sha256`, `ca_hkdf_sha256`
+  (`ca_hmac_sha256_ctx_t`), `ca_pbkdf2_sha256` (`ca_pbkdf2_sha256_ctx_t`),
+  `ca_ecdsa_p256_*` (`ca_ecdsa_p256_ctx_t`), `ca_ed25519_*` (`ca_ed25519_ctx_t`),
+  `ca_x25519/ca_x25519_base` (`ca_x25519_ctx_t`). The caller chooses where it lives:
+  heap (free it with `ca_memory_free(p, NULL, true)` to wipe it), static, or the
+  stack, which is the fast choice on H7/F7 (DTCM; PBKDF2 on the H753 runs twice as
+  fast as from heap) if the task stack is sized for it. Worst stack measured on the
+  H773: VNC/HTTPS task 4.8 -> 2.0 KB, SSH task 4.1 -> 2.1 KB. `ca_hmac_sha384()` is
+  removed (no users; `ca_hmac_sha384_ctx()` stays).
+- 2026-11-19  VNC: only what was drawn is read and sent. A connected viewer doing
+  nothing cost 14% CPU on the H753 (the whole frame re-hashed every poll),
+  now 0.6%; a small change reaches the viewer in ~1.3 ms instead of ~10 ms.
+- 2026-11-19  VNC: `ca_vnc_service_init()` refuses TLS without `cfg.cred`: a TLS
+  session always asks for a login (X509None is no longer offered).
+- 2026-11-19  VNC: an RGB565 or L8 framebuffer is converted for 32 bpp clients by
+  the DMA2D where the part has one, `VNC_CONV_LINES` rows at a time (default
+  8): a full update over TLS on the H753, 640x240 RGB565 90 -> 69 ms, 640x480
+  L8 153 -> 130 ms. DMA2D: new
+  `ca_dma2d_lock()`/`ca_dma2d_unlock()`, LVGL and VNC share it.
+- 2026-11-19  FREE edition: examples are built with `CAOS_FREE` defined, and the
+  graphics ones size themselves for half the heap: H753 ex138/ex139 480x320,
+  ex141 320x240; U575 ex138 480x320. ex141 does not fit on F767, H563, H773
+  in the FREE edition and says so at boot (LVGL alone: ex140).
+- 2026-11-19  Headers: no anonymous types in the OS. `CAQUEUE_STATIC_DEFINE(NAME,...)`
+  now declares `union NAME_qu` (use is unchanged, `static` in front still
+  works); the two words of `ca_mac_t.raw` have their own type `ca_mac_raw_t`.
+- 2026-11-19  UDP: a port belongs to the task that binds it. Binding a port
+  another live task holds is now refused (`ca_net_proto_bind_udp` returns
+  false) instead of silently stealing its datagrams; once the owner ends or
+  is restarted the port is free again. `ca_udp_client` handles left open by
+  a task that ended are closed within a second (buffers back to the pool).
+  ex136: `e136 orphan`.
+- 2026-11-19  Software timers belong to the task that creates them: when that
+  task ends or is restarted its timers are dropped (no more callbacks, slot
+  reused) instead of calling back into freed memory. Timers created before
+  the scheduler stay forever; `ca_sw_timer_detach()` hands a timer over to
+  the system when its callback uses statics only (`dac run` does).
+- 2026-11-18  Examples: ex85 `msink start` asks the example's own task to open
+  the port (a listener belongs to the task that opens it; a CLI command's task
+  ends with the command).
+<!-- paid -->
+- 2026-11-17  app_3: the router fragments forwarded datagrams over the MTU of
+  the egress iface (`EN_IP_FRAG`, `ip mtu`); with DF set the sender gets ICMP 3/4.
+  UDP fragments still do not cross the router.
+- 2026-11-17  TCP: `ca_tcp_send()` is all or nothing. It checks for an inflight
+  slot and a buffer for every segment first: `CA_TCP_RETRY` now means nothing
+  was sent (send the same buffer again after `ca_tcp_wait_writable()`), and
+  `CA_TCP_SENT` means the whole buffer is queued. Before, a multi-segment buffer
+  could stop half way and return `CA_TCP_RETRY` with part of it already sent.
+  Segments the peer's window or the driver cannot take yet wait in the store
+  and leave on the next ACK or timer tick. A buffer of more than
+  `TCP_MAX_INFLIGHT` segments returns `CA_TCP_GONE`.
+- 2026-11-16  NET: TCP announces an MSS that fits the MTU of the interface
+  (MTU - 40, at most 1460), so on a reduced-MTU link no segment needs
+  fragmenting. A change of MTU applies to the connections opened after it.
+- 2026-11-17  NET: IP reassembly no longer prints a line for every fragment
+  and every completed datagram (`DEFRAG frag:` / `DEFRAG COMPLETE:`); under a
+  burst the console starved the network. Drops, timeouts and init still print.
+- 2026-11-16  NET: `ca_ip_fragment_send()` and `ca_net_tx_mtu()` are removed:
+  fragmentation is the job of the `EN_IP_FRAG` service. The UDP server, UDP
+  client and TFTP no longer set DF, so their datagrams can be fragmented.
+- 2026-11-16  USB NCM: TCP data segments (buffers kept for retransmission) are
+  now sent by reference like every other frame - one copy per frame (to the
+  USB FIFO) instead of three. Received packets are read by the driver straight
+  into the network buffer on the NUCLEO-H7S3L8 high-speed driver: one copy
+  instead of two. New optional driver callbacks `rx_dest`/`rx_placed` in
+  `ca_usb_cb_t` (NULL-safe: drivers and classes without them are unchanged).
+- 2026-11-16  net: the Internet checksum (`ca_net_cksum`, TCP pseudo-header
+  checksum) reads by aligned 32-bit words instead of byte by byte; new
+  `ca_net_cksum_sum()` returns the folded, non-inverted sum. Same results.
+
+### Fixed
+- 2026-11-21  CLI: `stack` without a number lists every task again (since May
+  it showed only task 0). One line per task: name, size, used, free bytes,
+  PSP and floor check; `stack N` adds the addresses of task N. Both end with
+  the free space of the stack arena and its largest contiguous block.
+- 2026-11-21  TCP: a connection whose data was all queued waiting for the
+  window, behind a driver that refuses every frame, now ends in the abort
+  after the retransmission bound instead of staying open for ever.
+- 2026-11-21  Crypto: the key store grows from 2 KB to 4 KB. With software AES
+  (F446, F767, H563, U575) a second secure-pipe link no longer fails to start:
+  the AES context with its GCM tables takes ~560 B per session context.
+- 2026-11-20  TCP: a connection closed by its task just before the task ends
+  (a CLI command) now completes its FIN/ACK close instead of being reset by
+  the cleanup of ended tasks.
+- 2026-11-20  HTTP: a connection closed without an answer because no request
+  arrived within `HTTP_RECV_TIMEOUT_MS` is now reported on the console
+  (`HTTP: no request within 1500 ms`) instead of being dropped silently.
+- 2026-11-20  Examples: ex143 `e143 test` checks the AES/GHASH split only on the
+  software path: on parts with an AES unit the two phases overlap and the test
+  failed on a healthy board. ex143 no longer enables the unused CRC and RNG CLIs.
+- 2026-11-20  Examples: ex42 `mqx cycle` / `mqx conn` open the MQTT connection
+  from the MQTT task instead of the CLI command: the session no longer drops a
+  second after the command ends (its socket belonged to the finished command
+  task, which the task reaper cleans up).
+- 2026-11-20  TFTP: a filename longer than 128 characters (`tftp get` takes the
+  rest of the line) overflowed the request buffer on the caller's stack; the
+  transfer is now refused. Request and retransmit buffer live in the transfer
+  slot: `tftp put` needs ~650 B less stack.
+- 2026-11-19  VNC: on a tight heap the TLS service stopped at once ("no memory for TLS"):
+  the TLS context is now taken before the optional buffers, which fall back to one
+  row. Example 139 on F439: framebuffer 320x160 (was 320x200), so TLS fits.
+- 2026-11-19  Examples 141/142: 'e14x start' after a VNC session failed on H773 (the
+  command's own task took the stack the GUI task needed); LVGL is now started by a
+  resident task once the command has ended.
+- 2026-11-19  Example 142: disabled on F767 (159 KB of heap with USB-NCM, LVGL could not
+  start); use example 141 over Ethernet there.
+- 2026-11-19  VNC: after a non-incremental update of part of the screen, a tile it
+  covered only in part could later be skipped (the viewer kept an old pixel).
+- 2026-11-18  NET: TCP resources of a task that ended or restarted are released:
+  within 1 s its listeners stop and its connections are reset, and
+  `ca_tcp_listen()` on a port left by such a task takes it back. A port held
+  by a live task is refused (one listener per port). Fixes VNC unreachable
+  after a fault of its task (two listeners on 5900, the dead one answering).
+- 2026-11-18  NET: VNC no longer frees the buffers of a previous `vnc` task
+  that died (two "Invalid Free" on `vnc start` after a fault).
+- 2026-11-18  Examples: ex138 `fb test` passes again (44/44): its "bad format"
+  case used the value that became `CA_FB_FMT_RGB565`, the framebuffer it then
+  created took the slot of the later checks.
+- 2026-11-17  NET: VNC over TLS no longer overflows the `vnc` task stack on
+  parts with a small `STACK_MIN` (H773): with `EN_VNC_TLS` the task gets at
+  least 8 KB, as the HTTPS one.
+- 2026-11-17  NET: two tasks calling `ca_udp_client_connect()` at the same
+  time could get the same handle and share one client slot (the slot was
+  claimed only after the ARP resolve); the slot is now reserved up front.
+  The lazy init of the module is atomic too, and `ca_udp_client_disconnect()`
+  no longer leaves stale wake-ups for the next client on the same slot.
+  ex136 gets `e136 conn [tasks] [rounds]` to exercise concurrent connects.
+- 2026-11-17  NET: `ca_tcp_recv()` with a buffer smaller than the received
+  segment lost the rest of the segment, which the board had already
+  acknowledged, so the peer never resent it: a silent hole in the stream
+  (TCP echo of ex41 with 1000-byte segments; SSH could hit it with a nearly
+  full receive buffer). The rest is now returned by the next calls, in order.
+- 2026-11-17  Examples: the TCP echo of ex41, ex76 and ex126 ignored
+  `CA_TCP_RETRY` from `ca_tcp_send()` and dropped that chunk when the TX
+  slots were full; it now waits for room and sends it again.
+- 2026-11-16  USB NCM: an IN NTB that was an exact multiple of the packet size
+  needed a closing zero-length packet, which was dropped when the TX queue was
+  full - the frame then waited in the PC until the next one. Such an NTB now
+  carries one pad byte instead, so its last packet is always short.
+- 2026-11-15  USB CDC: when a write was an exact multiple of the packet size and
+  the TX queue was full, the closing zero-length packet was skipped, and the host
+  held back the last packet of a stream until the next write. It is now retried
+  for up to ~20 ms.
+- 2026-11-15  ex52/ex56: the echo task copied only one buffer per wake-up and the
+  receive ring in the ISR dropped bytes under a continuous stream; both examples
+  now read with the pull mode and lose nothing.
+- 2026-11-15  ex50 on the NUCLEO-H7S3L8: the CLI built-in commands failed with
+  `[SAFEGUARD] create 'cli_cmd' ... no stack block`; the loopback tasks now use
+  `STACK_SMALL` and leave room in the PSP arena.
+- 2026-11-15  ETH: about 1 boot in 300 stopped on `SAFEGUARD FATAL ca_net_init`
+  (seen on the NUCLEO-F439ZI). The LAN87xx PHY sometimes latches its strap pins
+  as power-down mode at reset and gives no RMII clock. `ca_eth_init()` now
+  detects this, puts the PHY back in autonegotiation mode and retries the init;
+  the console shows `ETH: PHY strap mode repaired`.
+- 2026-11-15  ETH (F4, F7): the RMII/MII interface is now selected with the MAC
+  held in reset and its clocks off, as the reference manual requires.
 
 ## free-v0.1.1 - 2026-11-15
 
@@ -284,6 +740,9 @@ start with `<!-- paid -->`: they are removed from the FREE package.
 - 2026-11-03  Net: the frame counters of `ip if` / `ca_net_stats()` (tx frames,
   tx failed, rx dropped for an empty pool) could lose counts when two tasks
   transmitted at once, or a task and the USB interrupt.
+- 2026-11-03  USB HS (H7, H7S): two tasks writing the same IN
+  endpoint (e.g. CDC from several tasks) could fill the same queue slot, so
+  one write was lost and the other sent twice.
 - 2026-11-02  ex2: `same` and `multi` keep the stack of one CLI command free.
   On a small PSP arena (H7S3, 48 KB) the workers took all of it, and every
   following command printed a SAFEGUARD line before running.
@@ -302,6 +761,10 @@ start with `<!-- paid -->`: they are removed from the FREE package.
   were held. B2 is now ignored while PC13 is a tamper input.
 - 2026-11-02  SPI (H7S): the alternate SPI3 map set MOSI on PB5 with AF6,
   which is PSSI_D10 on this part; SPI3_MOSI there is AF7.
+- 2026-11-02  Tamper (H7S): tamper 1 on the B2 pin never fired. The
+  pin has no external pull-up on the NUCLEO-H7S3L8 and the tamper ignores the
+  GPIO pull; it now uses level detection with the internal precharge pull-up
+  (a press = low level), sampled on the RTC clock.
 - 2026-11-02  SDIO (H7S): the SDMMC1 pins used the H753 alternate function
   (AF12 on all six); on this part CK, CMD, D0, D1 and D3 are AF11, so no card
   ever answered.

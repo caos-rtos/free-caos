@@ -302,15 +302,10 @@ static u32 task_hb(void *arg)
  * CLI: link test
  * ============================================================================ */
 #if ENABLE_CLI
-static bool link_cli_handler(c_str *pcmd)
+/* link — the line arrives without the command word */
+static bool link_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("link      : test (secure pipe link, both ends here)");
-        return false;
-    }
-    if (ca_strncmp(p, "link", 4) != 0) return false;
-    p = ca_skip_sp(p + 4);
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "test", 4) == 0) {
         if (s_running) { CLI_PUT_N("link: test already running"); return true; }
         ca_sem_post(&s_go);
@@ -319,7 +314,13 @@ static bool link_cli_handler(c_str *pcmd)
     CLI_PUT_N("link: test");
     return true;
 }
-static ca_cli_node_t s_link_cli = { link_cli_handler, NULL };
+static const ca_cli_cmd_t s_link_cmds[] = {
+    { "link", "link      : test (secure pipe link, both ends here)", { link_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_link_table = {
+    "link", s_link_cmds, (u16)(sizeof(s_link_cmds) / sizeof(s_link_cmds[0])), NULL
+};
 #endif
 
 void ca_os_configure(void)
@@ -333,7 +334,7 @@ void ca_os_configure(void)
         ca_cli_init(1024);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_link_cli);
+        ca_cli_register_table(&s_link_table);
     )
     ca_led_init();
     ca_led_off(1U);

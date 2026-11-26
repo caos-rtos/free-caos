@@ -548,15 +548,10 @@ static void ex92_xspeed(void)
 #define EX92_HELP "e92       : start | write | read | wire | sweep | bench | clk <MHz> | shift auto|on|off | dump [addr hex] | info"
 #endif
 
-static bool ex92_cli_handler(c_str *pcmd)
+/* e92 — the line arrives without the command word */
+static bool e92_cmd(c_str *args)
 {
-    c_str cmd = *pcmd;
-    const char *p = ca_skip_sp(cmd->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) { CLI_PUT_N(EX92_HELP); return false; }
-    if (ca_strncmp(p, "e92", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
-
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "info", 4) == 0) {
         CLI_PRINTF_N("id      : %02X %02X %02X   clk_div %u -> %u kHz (kernel %u Hz)",
                      s_id[0], s_id[1], s_id[2], s_clk_div,
@@ -604,14 +599,20 @@ static bool ex92_cli_handler(c_str *pcmd)
         s_dump_addr = (*p != '\0') ? (u32)ca_strtol(p, 16) : (EX92_SECTOR + EX92_OFF);
         r = REQ_DUMP;
     }
-    if (r == REQ_NONE) { CLI_PUT_N(EX92_HELP); return true; }
+    if (r == REQ_NONE) { return false;                   /* cli prints the help line */ return true; }
 
     if (s_req != REQ_NONE) { CLI_PUT_N("e92: busy - wait for the verdict"); return true; }
     s_req = r;
     return true;
 }
 
-static ca_cli_node_t s_ex92_cli_node = { ex92_cli_handler, NULL };
+static const ca_cli_cmd_t s_e92_cmds[] = {
+    { "e92", EX92_HELP, { e92_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_e92_table = {
+    "e92", s_e92_cmds, (u16)(sizeof(s_e92_cmds) / sizeof(s_e92_cmds[0])), NULL
+};
 #endif
 
 void ca_os_configure(void)
@@ -627,7 +628,7 @@ void ca_os_configure(void)
         ca_cli_create_thread();
     )
     EVAL_USB_CDC_STD( ca_usb_dev_mng_cdc_cli(); )
-    EVAL_CLI( ca_cli_register(&s_ex92_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_e92_table); )
 }
 
 void ca_os_main(void)

@@ -327,18 +327,10 @@ static u32 task_loop(void *arg)
 
 /* ---- CLI "e64" ---- */
 #if ENABLE_CLI
-static bool ex64_cli_handler(c_str *pcmd)
+/* e64 — the line arrives without the command word */
+static bool e64_cmd(c_str *args)
 {
-    c_str cmd = *pcmd;
-    const char *p = ca_skip_sp(cmd->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("e64       : start | info | regs | buf | wire");
-        return false;
-    }
-    if (ca_strncmp(p, "e64", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
-
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "start", 5) == 0) {
         s_loop_idle  = false;   /* cleared here: the pass has been asked for */
         s_loop_stop  = false;
@@ -446,11 +438,16 @@ static bool ex64_cli_handler(c_str *pcmd)
                      s_rx[12], s_rx[13], s_rx[14], s_rx[15]);
         return true;
     }
-    CLI_PUT_N("e64       : start | info | regs | buf | wire");
-    return false;
+    return false;                   /* cli prints the help line */
 }
 
-static ca_cli_node_t s_ex64_cli_node = { ex64_cli_handler, NULL };
+static const ca_cli_cmd_t s_e64_cmds[] = {
+    { "e64", "e64       : start | info | regs | buf | wire", { e64_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_e64_table = {
+    "e64", s_e64_cmds, (u16)(sizeof(s_e64_cmds) / sizeof(s_e64_cmds[0])), NULL
+};
 #endif
 
 /* ---- entry points ---- */
@@ -472,7 +469,7 @@ void ca_os_configure(void)
 
     /* SPI+DMA are NOT opened here: see the init inside task_loop(). */
 
-    EVAL_CLI( ca_cli_register(&s_ex64_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_e64_table); )
 }
 
 void ca_os_main(void)

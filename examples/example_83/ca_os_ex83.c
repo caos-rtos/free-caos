@@ -118,7 +118,7 @@ static const ca_ipv4_t s_ip = { .v = { 192U, 168U, 10U, 83U } };
 
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .v = { 192U, 168U, 10U, 83U } },
-    .mac  = { .v = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x83U } },
+    .mac  = CA_EXAMPLE_MAC(83),
     .udp  = { .bindings = {{0}}, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -127,7 +127,7 @@ static const ca_net_cfg_t net_cfg = {
 static ca_usb_ncm_cfg_t s_ncm = {
     .header = { CA_USB_TYPE_NCM, &ca_usb_ncm_ops },
     .mps    = 64U,
-    .mac    = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0xC3U },  /* Host-side MAC */
+    .mac    = CA_EXAMPLE_MAC_HOST(83),  /* Host-side MAC */
     /* .on_rx set by ca_ncm_iface_get() */
 };
 
@@ -236,14 +236,20 @@ static u32 task_ncm_mon(void *arg)
 
 /* ── Diagnostic CLI ──────────────────────────────────────────────────────── */
 #if ENABLE_CLI
-static bool dbg_cli_handler(c_str *pcmd)
+/* usbdbg — the line arrives without the command word */
+static bool usbdbg_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "usbdbg", 6) != 0) return false;
+    (void)args;
     EVAL_USB_DBG(ca_usb_dbg_print(USB_NUM);)
     return true;
 }
-static ca_cli_node_t s_dbg_cli = { dbg_cli_handler, NULL };
+static const ca_cli_cmd_t s_usbdbg_cmds[] = {
+    { "usbdbg", "usbdbg    : print the USB stack debug state", { usbdbg_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_usbdbg_table = {
+    "usbdbg", s_usbdbg_cmds, (u16)(sizeof(s_usbdbg_cmds) / sizeof(s_usbdbg_cmds[0])), NULL
+};
 #endif
 
 /* ── caOS hooks ───────────────────────────────────────────────────────────── */
@@ -258,7 +264,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_dbg_cli);
+        ca_cli_register_table(&s_usbdbg_table);
     )
 
     ca_led_init();

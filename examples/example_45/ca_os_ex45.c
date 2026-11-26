@@ -55,7 +55,7 @@
 static ca_eth_cfg_t eth_cfg = {
     .phy_addr = 0U,
     .rmii     = true,
-    .mac      = { .v = { 0x02U, 0x00U, 0x00U, 0x01U, 0x02U, 0x45U } },
+    .mac      = CA_EXAMPLE_MAC(45),
 };
 
 static ca_mac_t s_mac;
@@ -238,7 +238,7 @@ static void on_link_change(bool up)
 
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .addr = 0U },
-    .mac  = { .v = { 0x02U, 0x00U, 0x00U, 0x01U, 0x02U, 0x45U } },
+    .mac  = CA_EXAMPLE_MAC(45),
     .udp  = { .bindings = { {0U, NULL} }, .count = 0U },
     .icmp = { .echo_reply = true },
 };

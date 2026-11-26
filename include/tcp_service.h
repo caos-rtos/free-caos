@@ -71,9 +71,12 @@ void ca_tcp_service_start(void);
 u8   ca_tcp_connect(const ca_tcp_connect_cfg_t *cfg);
 
 /**
- * Send data on an ESTABLISHED connection.
- * Data is segmented into MSS chunks; each segment is sent zero-copy.
- * Returns false if connection not ESTABLISHED or TX inflight pool exhausted.
+ * Send data on an ESTABLISHED connection, ALL OR NOTHING.
+ * Data is cut into segments of min(MSS, current MTU - 40), one inflight slot
+ * each; the call needs a slot and a buffer for every segment (at most
+ * TCP_MAX_INFLIGHT segments per call, else CA_TCP_GONE). A segment the peer's
+ * window or the driver cannot take now stays stored and leaves on the next
+ * ACK or timer tick - the caller does not see it.
  */
 /** ca_tcp_send() outcomes.
  *
@@ -91,8 +94,11 @@ u8   ca_tcp_connect(const ca_tcp_connect_cfg_t *cfg);
  * its KEXINIT with no banner in front. The client saw a key exchange where it
  * expected "SSH-2.0-" and reset the connection.
  */
-#define CA_TCP_SENT    ( 1)   /* queued for transmission                     */
-#define CA_TCP_RETRY   ( 0)   /* transient: no slot / window 0 - send again  */
+#define CA_TCP_SENT    ( 1)   /* the WHOLE buffer queued for transmission    */
+#define CA_TCP_RETRY   ( 0)   /* transient: not enough inflight slots or
+                                 buffers for the whole buffer. NOTHING was
+                                 sent: send the same again (after
+                                 ca_tcp_wait_writable)                       */
 #define CA_TCP_GONE    (-1)   /* final: handle stale, or not ESTABLISHED     */
 
 i32  ca_tcp_send(u8 handle, const u8 *data, u16 len);
@@ -106,8 +112,10 @@ bool ca_tcp_wait_writable(u8 handle, u32 timeout_ms);
 
 /**
  * Blocking receive (only in on_rx==NULL mode).
- * Waits up to timeout_ms for received data.
- * Returns false on timeout or wrong mode.
+ * Waits up to timeout_ms for received data, then copies into buf at most
+ * buf_len bytes of ONE segment (*out_len). A segment larger than buf_len is
+ * not lost: the rest is returned by the next calls, in order.
+ * Returns false on timeout, closed connection or wrong mode.
  */
 bool ca_tcp_recv(u8 handle, u8 *buf, u16 buf_len,
                  u16 *out_len, u32 timeout_ms);
@@ -133,6 +141,10 @@ void ca_tcp_abort(u8 handle);
  * Returns true if connection is in ESTABLISHED state.
  */
 bool ca_tcp_is_connected(u8 handle);
+
+/** The remote end of a live connection (ip, port: either may be NULL).
+ *  False on a stale handle. */
+bool ca_tcp_peer(u8 handle, ca_ipv4_t *ip, u16 *port);
 
 /* ----------------------------------------------------------------------- */
 /* TCP Server — passive open (listen/accept)                               */

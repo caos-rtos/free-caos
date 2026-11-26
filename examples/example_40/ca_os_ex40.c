@@ -75,7 +75,7 @@
 /* ============================================================================
  * Network
  * ============================================================================ */
-static const ca_mac_t s_mac = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x40U } };
+static const ca_mac_t s_mac = CA_EXAMPLE_MAC(40);
 
 static volatile ca_ipv4_t s_ip         = { .addr = 0U };
 static volatile bool   s_dhcp_bound = false;
@@ -91,7 +91,7 @@ static void on_link_change(bool up);
 static ca_eth_cfg_t eth_cfg = {
     .phy_addr = 0U,
     .rmii     = true,
-    .mac      = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x40U } },
+    .mac      = CA_EXAMPLE_MAC(40),
     .link_cb  = on_link_change,
 };
 
@@ -149,7 +149,7 @@ static void on_link_change(bool up)
  * ============================================================================ */
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .addr = 0U },
-    .mac  = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x40U } },
+    .mac  = CA_EXAMPLE_MAC(40),
     .udp  = { .bindings = { {0U, NULL} }, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -300,18 +300,10 @@ static u32 task_eth_mon(void *arg)
  * CLI "e40"
  * ============================================================================ */
 #if ENABLE_CLI
-static bool ex40_cli_handler(c_str *pcmd)
+/* e40 — the line arrives without the command word */
+static bool e40_cmd(c_str *args)
 {
-    c_str cmd = *pcmd;
-    const char *p = ca_skip_sp(cmd->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("e40       : start | info");
-        return false;
-    }
-    if (ca_strncmp(p, "e40", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
-
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "start", 5) == 0) {
         if (!s_ready)     { CLI_PUT_N("e40: no DHCP lease yet"); return true; }
         if (s_busy)       { CLI_PUT_N("e40: a fetch is already running"); return true; }
@@ -327,7 +319,13 @@ static bool ex40_cli_handler(c_str *pcmd)
     return true;
 }
 
-static ca_cli_node_t s_ex40_cli_node = { ex40_cli_handler, NULL };
+static const ca_cli_cmd_t s_e40_cmds[] = {
+    { "e40", "e40       : start | info", { e40_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_e40_table = {
+    "e40", s_e40_cmds, (u16)(sizeof(s_e40_cmds) / sizeof(s_e40_cmds[0])), NULL
+};
 #endif
 
 /* ============================================================================
@@ -401,7 +399,7 @@ void ca_os_configure(void)
 
     ca_sem_init(&s_dhcp_sem, "DHCPBND", 0U, 1U);
     ca_sem_init(&s_start_sem, "E40GO", 0U, 1U);
-    EVAL_CLI( ca_cli_register(&s_ex40_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_e40_table); )
 }
 
 void ca_os_main(void)

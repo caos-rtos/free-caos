@@ -79,11 +79,13 @@ void ca_sha256_final(ca_sha256_ctx_t *ctx, u8 *digest);
 
 /**
  * @brief One-shot calculation: init + update + final.
+ * @param ctx    Working context from the caller (heap, static or its own
+ *               state, never needed on the stack); zeroed on return
  * @param data   Message
  * @param len    Length in bytes
  * @param digest Output buffer, SHA256_DIGEST_SIZE bytes
  */
-void ca_sha256(const u8 *data, u32 len, u8 *digest);
+void ca_sha256(ca_sha256_ctx_t *ctx, const u8 *data, u32 len, u8 *digest);
 
 #if EN_SHA256_TEST
 /**

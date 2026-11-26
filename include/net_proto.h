@@ -240,8 +240,15 @@ ca_ipv4_t ca_net_proto_next_hop(ca_ipv4_t dst);
 void ca_net_proto_cli_ping(ca_ipv4_t target, u32 count, u32 timeout_ms);
 #endif
 
-/* Registers/removes UDP handlers. fn=NULL removes. Returns false if table is full. */
+/* Registers/removes UDP handlers. fn=NULL removes. Returns false if the table
+ * is full or the port is bound by another task that is still alive. A binding
+ * belongs to the task that makes it: once that task ends or is restarted the
+ * port is free again (bound before the scheduler = the system's, kept). */
 bool ca_net_proto_bind_udp(u16 port, ca_udp_rx_t fn);
+
+/* Drops the bindings of tasks that ended. The net stack calls it once a
+ * second from ca_net_process(). */
+void ca_net_proto_udp_reap(void);
 
 /* Registers global TCP handler (only one handler, manages all PCBs). fn=NULL removes. */
 typedef void (*ca_tcp_rx_raw_t)(u16 buf_idx);
@@ -311,6 +318,11 @@ bool ca_net_proto_icmp_echo(const ca_ip4_frame_t *ip4,
 /** Internet checksum RFC 1071. Returns 0 on correct data. */
 u16 ca_net_cksum(const u8 *buf, u16 len);
 
+/** One's complement sum of buf as big-endian 16-bit words, folded to 16 bits
+ *  and NOT inverted: the building block of ca_net_cksum() and of the
+ *  pseudo-header checksums. Reads by aligned 32-bit words. */
+u16 ca_net_cksum_sum(const u8 *buf, u16 len);
+
 /** TCP checksum over the IPv4 pseudo-header + segment (RFC 793). */
 u16 ca_net_tcp_cksum(ca_ipv4_t src, ca_ipv4_t dst,
                      const u8 *tcp_seg, u16 tcp_seg_len);
@@ -323,29 +335,9 @@ u16 ca_net_tcp_cksum(ca_ipv4_t src, ca_ipv4_t dst,
  * as every builder sends it (optional in IPv4, RFC 768). Idempotent. */
 void ca_net_proto_csum_fill(u8 *frame, u16 len);
 
-/* Send an IPv4 datagram, fragmenting it when it does not fit the interface MTU.
- *
- * The TX counterpart of ca_ip_defrag_submit(): the stack could reassemble
- * incoming fragments but not produce them, so any datagram too large for one
- * frame was dropped silently by whichever builder had assembled it.
- *
- * The L4 header and the payload are passed SEPARATELY because only the first
- * fragment carries the header - to IP the transport header is just the first
- * l4len bytes of the datagram. Callers keep building their own UDP/ICMP header
- * exactly as before and hand it over here.
- *
- * MTU comes from the interface (ca_net_tx_mtu): NCM refuses frames over 1514,
- * an ETH driver has more room, and the same datagram is legal on one and not
- * on the other.
- *
- * Returns false if a fragment could not be sent. Those already on the wire are
- * not recalled - IP has no such notion - so the peer sees a lost fragment and
- * its reassembly times out.
- */
-bool ca_ip_fragment_send(ca_mac_t dst_mac, ca_ipv4_t src_ip, ca_ipv4_t dst_ip,
-                         ca_mac_t src_mac, u8 proto,
-                         const u8 *l4hdr, u16 l4len,
-                         const u8 *payload, u16 plen);
+/* Fragmentation on transmit is no longer a function the builders call: any
+ * datagram over the egress MTU is cut by the ip_frag service (EN_IP_FRAG,
+ * ip_frag.h), from inside ca_net_send_on(). */
 
 /**
  * Builds ICMP echo reply frame.

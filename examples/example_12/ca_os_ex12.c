@@ -68,30 +68,27 @@ static u32 task_3_exec(void *arg) {
     return 0;
 }
 
-/**
- * @brief CLI handler for user commands (chain of responsibility)
- */
-static bool user_cli_handler(c_str *pcmd)
+/* User command table: one entry per command word. The function gets the
+ * line without its word; 'show' runs in a cli_cmd task named "show". */
+static bool show_cmd(c_str *args)
 {
-    c_str cmd = *pcmd;
-    const char *p = ca_skip_sp(cmd->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("show : show task counters");
-        return false;   /* continue chain: show other help as well */
-    }
-    if (ca_strncmp(p, "show", 4) == 0) {
-        CLI_PUT_N("--- task counters ---");
-        CLI_PRINTF_N("shared  : %u", (u32)shared_counter);
-        CLI_PRINTF_N("t1_w1   : %u", (u32)counter_t1);
-        CLI_PRINTF_N("t1_w2   : %u", (u32)counter_t2);
-        CLI_PRINTF_N("t1_w3   : %u", (u32)counter_t3);
-        return true;
-    }
-    return false;
+    (void)args;
+    CLI_PUT_N("--- task counters ---");
+    CLI_PRINTF_N("shared  : %u", (u32)shared_counter);
+    CLI_PRINTF_N("t1_w1   : %u", (u32)counter_t1);
+    CLI_PRINTF_N("t1_w2   : %u", (u32)counter_t2);
+    CLI_PRINTF_N("t1_w3   : %u", (u32)counter_t3);
+    return true;
 }
 
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
+static const ca_cli_cmd_t s_user_cmds[] = {
+    { "show", "show      : task counters (shared and per worker)", { show_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_user_table = {
+    "user", s_user_cmds, (u16)(sizeof(s_user_cmds) / sizeof(s_user_cmds[0])), NULL
+};
+
 
 /**
  * @brief User modules initialization
@@ -112,8 +109,8 @@ void ca_os_configure(void) {
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
     )
-    /* Onboard LEDs: registers the "led" CLI node, so it has to run after
-     * ca_cli_init() above - the flags alone leave the command unknown. */
+    /* Onboard LEDs: registers the "led" command table, so it has to run
+     * after ca_cli_init() above - the flags alone leave the command unknown. */
     EVAL_LED( ca_led_init(); )
     /* DBG */
     EVAL_USB_CDC_STD(ca_usb_dev_mng_cdc_cli();)
@@ -121,7 +118,7 @@ void ca_os_configure(void) {
 
 /**
  * @brief Main task
- * @details Creates user tasks, registers CLI hooks, and starts the scheduler.
+ * @details Creates user tasks, registers the command table, starts the scheduler.
  */
 void ca_os_main(void) {
     killer = 1;
@@ -143,6 +140,6 @@ void ca_os_main(void) {
                        STACK_MEDIUM, CA_JOB_STD, CA_FAULT_ASSERT);
 #endif
     
-    EVAL_CLI( ca_cli_register(&s_user_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_user_table); )
     ca_os_run(true);
 }

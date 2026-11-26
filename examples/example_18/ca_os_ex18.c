@@ -108,49 +108,57 @@ static u32 task_monitor(void *arg) {
 }
 
 /* ============================================================================
- * CLI — chain of responsibility
+ * CLI — command table
  * ========================================================================== */
 
-static bool user_cli_handler(c_str *pcmd)
+/* one entry per command word; each gets the line without its word */
+static bool arm_cmd(c_str *args)
 {
-    c_str cmd = *pcmd;
-    const char *p = ca_skip_sp(cmd->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("arm   - arm the one-shot (3s)");
-        CLI_PUT_N("stop  - stop the stats timer");
-        CLI_PUT_N("start - start the stats timer");
-        CLI_PUT_N("show  - timer status");
-        return false;
-    }
-    if (ca_strncmp(p, "arm", 3) == 0 && (p[3] == 0 || p[3] == ' ')) {
-        ca_sw_timer_reset(htim_oneshot);
-        ca_sw_timer_start(htim_oneshot);
-        CLI_PUT_N("one-shot armed (3s)");
-        return true;
-    }
-    if (ca_strncmp(p, "stop", 4) == 0 && (p[4] == 0 || p[4] == ' ')) {
-        ca_sw_timer_stop(htim_stats);
-        CLI_PUT_N("timer stats stopped");
-        return true;
-    }
-    if (ca_strncmp(p, "start", 5) == 0 && (p[5] == 0 || p[5] == ' ')) {
-        ca_sw_timer_start(htim_stats);
-        CLI_PUT_N("timer stats started");
-        return true;
-    }
-    if (ca_strncmp(p, "show", 4) == 0 && (p[4] == 0 || p[4] == ' ')) {
-        CLI_PUT_N("--- Example 18 ---");
-        CLI_PRINTF_N("led ticks    : %u", (u32)led_ticks);
-        CLI_PRINTF_N("stats fires  : %u", (u32)stats_ticks);
-        CLI_PRINTF_N("oneshot fires: %u", (u32)oneshot_fired);
-        CLI_PRINTF_N("active timers: %u", (u32)ca_sw_timer_count_active());
-        return true;
-    }
-    return false;
+    (void)args;
+    ca_sw_timer_reset(htim_oneshot);
+    ca_sw_timer_start(htim_oneshot);
+    CLI_PUT_N("one-shot armed (3s)");
+    return true;
 }
 
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
+static bool stop_cmd(c_str *args)
+{
+    (void)args;
+    ca_sw_timer_stop(htim_stats);
+    CLI_PUT_N("timer stats stopped");
+    return true;
+}
+
+static bool start_cmd(c_str *args)
+{
+    (void)args;
+    ca_sw_timer_start(htim_stats);
+    CLI_PUT_N("timer stats started");
+    return true;
+}
+
+static bool show_cmd(c_str *args)
+{
+    (void)args;
+    CLI_PUT_N("--- Example 18 ---");
+    CLI_PRINTF_N("led ticks    : %u", (u32)led_ticks);
+    CLI_PRINTF_N("stats fires  : %u", (u32)stats_ticks);
+    CLI_PRINTF_N("oneshot fires: %u", (u32)oneshot_fired);
+    CLI_PRINTF_N("active timers: %u", (u32)ca_sw_timer_count_active());
+    return true;
+}
+
+static const ca_cli_cmd_t s_user_cmds[] = {
+    { "arm", "arm       : arm the one-shot (3 s)", { arm_cmd, STACK_MEDIUM } },
+    { "stop", "stop      : stop the stats timer", { stop_cmd, STACK_MEDIUM } },
+    { "start", "start     : start the stats timer", { start_cmd, STACK_MEDIUM } },
+    { "show", "show      : timer status", { show_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_user_table = {
+    "user", s_user_cmds, (u16)(sizeof(s_user_cmds) / sizeof(s_user_cmds[0])), NULL
+};
+
 
 /* ============================================================================
  * ca_os_configure
@@ -203,7 +211,7 @@ void ca_os_main(void) {
     ca_os_job("monitor", CA_TH_LEVEL1, task_monitor, NULL,
               STACK_SMALL, CA_JOB_STD, CA_FAULT_ASSERT);
 
-    EVAL_CLI( ca_cli_register(&s_user_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_user_table); )
 
     ca_os_run(true);
 }

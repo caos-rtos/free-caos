@@ -39,6 +39,8 @@
 #define CRYPTO_ED25519_H
 
 #include "common.h"
+#include "sha512.h"
+#include "x25519.h"
 
 /* ============================================================================
  * CONSTANTS
@@ -49,6 +51,63 @@
 #define ED25519_SIGNATURE_SIZE  64
 
 /* ============================================================================
+ * WORKING CONTEXT - given by the caller to every function below
+ *
+ * Heap, static or the caller's own state: never needed on the task stack.
+ * Every function wipes it before returning. On H7/F7 a context on the stack
+ * (DTCM) is the fast choice, in heap (AXI SRAM) the light one for the stack.
+ * The member types are the internals of the implementation: do not use them.
+ * ========================================================================== */
+
+typedef struct { ca_fe25519_t X, Y, Z, T; } ca_ge_p3_t;          /* extended */
+typedef struct { ca_fe25519_t X, Y, Z; } ca_ge_p2_t;             /* projective */
+typedef struct { ca_fe25519_t X, Y, Z, T; } ca_ge_p1p1_t;        /* add/dbl result */
+typedef struct { ca_fe25519_t YplusX, YminusX, T2d, Z2; } ca_ge_cached_t;
+
+/* r = a * P (constant time) */
+typedef struct {
+    ca_ge_p3_t     base, result, sum;
+    ca_ge_cached_t pc;
+    ca_ge_p1p1_t   t, tadd;
+} ca_ge_smul_work_t;
+
+/* r = a*A + b*B (verification) */
+typedef struct {
+    ca_ge_p3_t     bp, acc, tmp;
+    ca_ge_cached_t ac, bc;
+    ca_ge_p1p1_t   t;
+} ca_ge_dsmul_work_t;
+
+typedef struct {
+    ca_sha512_ctx_t   hash;
+    u8                h[64], nonce[64], hram[64], az[32];
+    ca_ge_p3_t        R;
+    ca_ge_smul_work_t sm;
+} ca_ed25519_sign_work_t;
+
+typedef struct {
+    ca_sha512_ctx_t    hash;
+    u8                 hram[64], checkr[32];
+    ca_ge_p3_t         A;
+    ca_ge_p2_t         R;
+    ca_ge_dsmul_work_t dsm;
+} ca_ed25519_verify_work_t;
+
+typedef struct {
+    ca_sha512_ctx_t   hash;
+    u8                h[64];
+    ca_ge_p3_t        A;
+    ca_ge_smul_work_t sm;
+} ca_ed25519_pub_work_t;
+
+/* One operation at a time: the three share the memory */
+typedef union {
+    ca_ed25519_sign_work_t   sign;
+    ca_ed25519_verify_work_t verify;
+    ca_ed25519_pub_work_t    pub;
+} ca_ed25519_ctx_t;
+
+/* ============================================================================
  * PUBLIC API
  * ========================================================================== */
 
@@ -57,7 +116,7 @@
  * @param public_key Output, 32 bytes
  * @param seed       Secret seed, 32 bytes
  */
-void ca_ed25519_public_from_seed(u8 *public_key, const u8 *seed);
+void ca_ed25519_public_from_seed(ca_ed25519_ctx_t *ctx, u8 *public_key, const u8 *seed);
 
 /**
  * @brief Generates a key pair using the hardware RNG.
@@ -69,7 +128,7 @@ void ca_ed25519_public_from_seed(u8 *public_key, const u8 *seed);
  * @param seed       Output, 32 bytes — to be kept secure (keys_store)
  * @return true if the RNG provided valid entropy
  */
-bool ca_ed25519_keygen(u8 *public_key, u8 *seed);
+bool ca_ed25519_keygen(ca_ed25519_ctx_t *ctx, u8 *public_key, u8 *seed);
 
 /**
  * @brief Signs a message (pure Ed25519, RFC 8032 §5.1.6).
@@ -83,7 +142,8 @@ bool ca_ed25519_keygen(u8 *public_key, u8 *seed);
  * @param seed       Secret seed, 32 bytes
  * @param public_key Corresponding public key, 32 bytes
  */
-void ca_ed25519_sign(u8 *signature, const u8 *message, u32 message_len,
+void ca_ed25519_sign(ca_ed25519_ctx_t *ctx, u8 *signature,
+                     const u8 *message, u32 message_len,
                      const u8 *seed, const u8 *public_key);
 
 /**
@@ -99,8 +159,8 @@ void ca_ed25519_sign(u8 *signature, const u8 *message, u32 message_len,
  * @param public_key  Signer's public key, 32 bytes
  * @return true if the signature is valid
  */
-bool ca_ed25519_verify(const u8 *signature, const u8 *message, u32 message_len,
-                       const u8 *public_key);
+bool ca_ed25519_verify(ca_ed25519_ctx_t *ctx, const u8 *signature,
+                       const u8 *message, u32 message_len, const u8 *public_key);
 
 #if EN_ED25519_TEST
 /**

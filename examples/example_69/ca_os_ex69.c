@@ -79,14 +79,14 @@
 /* ============================================================================
  * Network identity
  * ============================================================================ */
-static const ca_mac_t  s_mac = { .v = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x69U } };
+static const ca_mac_t  s_mac = CA_EXAMPLE_MAC(69);
 static const ca_ipv4_t s_ip  = { .v = { 192U, 168U, 10U, 69U } };
 
 /* ── USB NCM service (host-side MAC) ─────────────────────────────────────── */
 static ca_usb_ncm_cfg_t s_ncm = {
     .header = { CA_USB_TYPE_NCM, &ca_usb_ncm_ops },
     .mps    = 64U,
-    .mac    = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0xA9U },  /* Host-side MAC */
+    .mac    = CA_EXAMPLE_MAC_HOST(69),  /* Host-side MAC */
     /* .on_rx set by ca_ncm_iface_get() */
 };
 
@@ -134,7 +134,7 @@ static const ca_udp_server_cfg_t srv_cfg = {
     .port              = UDP_SRV_PORT,
     .max_clients       = MAX_CLIENTS,
     .client_timeout_ms = CLIENT_TIMEOUT_MS,
-    .local_mac         = { .v = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x69U } },
+    .local_mac         = CA_EXAMPLE_MAC(69),
     .local_ip          = { .v = { 192U, 168U, 10U, 69U } },
     .on_rx             = on_rx,
     .on_connect        = on_connect,
@@ -146,7 +146,7 @@ static const ca_udp_server_cfg_t srv_cfg = {
  * ============================================================================ */
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .v = { 192U, 168U, 10U, 69U } },
-    .mac  = { .v = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x69U } },
+    .mac  = CA_EXAMPLE_MAC(69),
     .udp  = { .bindings = { {0U, NULL} }, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -219,14 +219,20 @@ static u32 task_heartbeat(void *arg)
 
 /* ── Diagnostic CLI ──────────────────────────────────────────────────────── */
 #if ENABLE_CLI
-static bool dbg_cli_handler(c_str *pcmd)
+/* usbdbg — the line arrives without the command word */
+static bool usbdbg_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "usbdbg", 6) != 0) return false;
+    (void)args;
     EVAL_USB_DBG(ca_usb_dbg_print(USB_NUM);)
     return true;
 }
-static ca_cli_node_t s_dbg_cli = { dbg_cli_handler, NULL };
+static const ca_cli_cmd_t s_usbdbg_cmds[] = {
+    { "usbdbg", "usbdbg    : print the USB stack debug state", { usbdbg_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_usbdbg_table = {
+    "usbdbg", s_usbdbg_cmds, (u16)(sizeof(s_usbdbg_cmds) / sizeof(s_usbdbg_cmds[0])), NULL
+};
 #endif
 
 /* ============================================================================
@@ -244,7 +250,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_dbg_cli);
+        ca_cli_register_table(&s_usbdbg_table);
     )
 
     /* ca_net_init() is NOT called here (unlike ex34): the NCM iface only exists

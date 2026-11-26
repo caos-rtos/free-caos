@@ -34,8 +34,12 @@
  * ca_dma2d_wait() or ca_dma2d_abort(). Buffers anywhere the DMA2D reaches:
  * on H7 not the DTCM (the task stacks), so static. D-cache is off on F7/H7.
  *
- * Present on F767 (F746), H7 and U5; elsewhere ca_dma2d_init() returns false.
- * One user at a time, task context only.
+ * Present on F439, F767 (F746), H7, H7RS and U5; elsewhere ca_dma2d_init()
+ * returns false.
+ * Task context only. Several tasks (LVGL, the VNC service) share it through
+ * ca_dma2d_lock()/ca_dma2d_unlock(): each holds the lock from the start of
+ * its operations to their end (a CA_NO_WAIT_TIME one included, up to its
+ * wait). A single user may skip the lock.
  */
 #ifndef DMA2D_H
 #define DMA2D_H
@@ -113,6 +117,8 @@ void ca_dma2d_abort(void);
 bool ca_dma2d_busy(void);
 u32  ca_dma2d_errors(void);          /* CA_DMA2D_ERR_* */
 u32  ca_dma2d_bpp(ca_dma2d_fmt_t fmt);   /* bits per pixel, 0 = unknown */
+bool ca_dma2d_lock(u32 timeout_ms);  /* false: no DMA2D, or timeout */
+void ca_dma2d_unlock(void);
 
 #endif /* EN_DMA2D */
 

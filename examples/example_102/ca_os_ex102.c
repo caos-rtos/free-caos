@@ -541,13 +541,6 @@ static const char *ex102_num(const char *p, u32 *v)
     return p;
 }
 
-static void ex102_usage(void)
-{
-    CLI_PUT_N("fmac      : test | dump | filter [lp1k|bp1k|hp100|lp1k_iir]");
-    CLI_PUT_N("            tone <hz> | sweep [f0 f1 step]");
-    CLI_PUT_N("wire      : DAC -> ADC jumper continuity as plain GPIO, then reboot");
-}
-
 /* DIGITAL continuity of the jumper, as ex27: a missing wire and a broken
  * converter give the same "no signal", this tells them apart. DAC and ADC are
  * stopped first (the DAC buffer and the ADC pad switch would fight the GPIO),
@@ -581,14 +574,10 @@ static void ex102_wire(void)
     ca_os_reset();
 }
 
-static bool ex102_cli(c_str *pcmd)
+/* fmac — the line arrives without the command word */
+static bool fmac_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) { ex102_usage(); return false; }
-    if (ca_strncmp(p, "wire", 4) == 0) { ex102_wire(); return true; }
-    if (ca_strncmp(p, "fmac", 4) != 0) return false;
-    p = ca_skip_sp(p + 4);
-
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "test", 4) == 0) { ex102_test(); return true; }
     if (ca_strncmp(p, "dump", 4) == 0) { ex102_dump(); return true; }
     if (ca_strncmp(p, "filter", 6) == 0) {
@@ -605,7 +594,7 @@ static bool ex102_cli(c_str *pcmd)
     }
     if (ca_strncmp(p, "tone", 4) == 0) {
         u32 hz = 0U;
-        if (ex102_num(p + 4, &hz) == NULL || hz == 0U) { ex102_usage(); return true; }
+        if (ex102_num(p + 4, &hz) == NULL || hz == 0U) { return false; }
         ex102_cmd_tone(hz);
         return true;
     }
@@ -614,16 +603,30 @@ static bool ex102_cli(c_str *pcmd)
         const char *q = ex102_num(p + 5, &f0);
         if (q != NULL) {
             q = ex102_num(q, &f1);
-            if (q == NULL || ex102_num(q, &st) == NULL) { ex102_usage(); return true; }
+            if (q == NULL || ex102_num(q, &st) == NULL) { return false; }
         }
-        if (st == 0U || f1 < f0 || f1 > EX102_FS / 2U) { ex102_usage(); return true; }
+        if (st == 0U || f1 < f0 || f1 > EX102_FS / 2U) { return false; }
         ex102_cmd_sweep(f0, f1, st);
         return true;
     }
-    ex102_usage();
+    return false;                   /* cli prints the help line */
+}
+
+static bool wire_cmd(c_str *args)
+{
+    (void)args;
+    ex102_wire();
     return true;
 }
-static ca_cli_node_t s_cli = { ex102_cli, NULL };
+
+static const ca_cli_cmd_t s_ex102_cmds[] = {
+    { "fmac", "fmac      : test | dump | filter [lp1k|bp1k|hp100|lp1k_iir] | tone <hz> | sweep [f0 f1 step]", { fmac_cmd, STACK_MEDIUM } },
+    { "wire", "wire      : DAC -> ADC jumper continuity as plain GPIO, then reboot", { wire_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_ex102_table = {
+    "ex102", s_ex102_cmds, (u16)(sizeof(s_ex102_cmds) / sizeof(s_ex102_cmds[0])), NULL
+};
 #endif
 
 PRIVATE_STRING(why, "ex102: this part has no FMAC (H563 and U575 have it)");
@@ -654,7 +657,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_cli);
+        ca_cli_register_table(&s_ex102_table);
     )
 }
 

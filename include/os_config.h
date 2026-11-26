@@ -79,11 +79,12 @@
 #define EN_ADC                       1
 #define EN_DMA                       1
 #define EN_EXTI                      1
-#define EN_TAMP                      0
-#define EN_FMAC                      0
+#define EN_TAMP                      1
+#define EN_FMAC                      1
 #define EN_SAI                       1
 #define EN_SPDIFRX                   1
 #define EN_DMA2D                     1
+#define EN_FB                        1
 #define EN_JPEG                      1
 #define EN_DAC                       1
 #define EN_FLASH                     1
@@ -117,6 +118,9 @@
 #endif
 #if ( EN_FAT )
 #define EN_FAT_SERVICE               1
+#endif
+#if ( EN_FB )
+#define FB_COPY_MS                   50U
 #endif
 #if ( EN_FAT && EN_FAT_SERVICE )
 #define EN_FAT_CRYPT                 1
@@ -160,11 +164,14 @@
 #define EN_MQTT_SERVICE              1
 #define EN_MODBUS_SERVICE            1
 #define EN_IPERF_SERVICE             1
+#define EN_HTTPS_SERVICE             1
 #define EN_HTTP_SERVICE              1
-#define EN_HTTPS_SERVICE             0
+#define EN_VNC_SERVICE               1
 #define EN_IP_DEFRAG                 1
+#define EN_IP_FRAG                   0
 #define EN_SSH_SERVICE               1
 #define EN_TFTP_SERVICE              1
+#define UDP_REAP_MS                  1000U
 #endif
 #if ( EN_ARP_SERVICE )
 #define ARP_ENTRY_TTL                30000U
@@ -202,6 +209,10 @@
 #define IP_DEFRAG_MAX_SESSIONS       8U
 #define IP_DEFRAG_TIMEOUT_MS         15000U
 #define IP_DEFRAG_MAX_PAYLOAD        2048U
+#endif
+#if ( EN_IP_FRAG )
+#define IP_FRAG_IN_DEPTH             4U
+#define IP_FRAG_QUEUE_DEPTH          16U
 #endif
 #if ( EN_MODBUS_SERVICE )
 #define MODBUS_TIMEOUT_MS            1000U
@@ -244,6 +255,7 @@
 #define TCP_TIMER_TICK_MS            100U
 #define TCP_ARP_TIMEOUT_MS           2000U
 #define TCP_CONNECT_TIMEOUT_MS       5000U
+#define TCP_REAP_MS                  1000U
 #define TCP_MAX_CONN                 8U
 #define TCP_MAX_LISTEN               2U
 #define TCP_MAX_INFLIGHT             16U
@@ -262,6 +274,14 @@
 #define UDPSRV_MAX_CLIENTS           4U
 #define UDPSRV_RING_DEPTH            8U
 #endif
+#if ( EN_VNC_SERVICE )
+#define EN_VNC_TLS                   1
+#define VNC_DEFAULT_PORT             5900U
+#define VNC_TILE                     16U
+#define VNC_POLL_MS                  50U
+#define VNC_TX_BUF                   4096U
+#define VNC_CONV_LINES               8U
+#endif
 
 /* ===========================================================================
  * CRYPTO CONFIGURATION
@@ -274,18 +294,27 @@
 #define EN_SHA256                    1
 #define EN_SHA512                    1
 #define EN_X25519                    1
+#define EN_BLAKE2S                   1
+#define EN_CHACHA20_POLY1305         1
+#define EN_ECDSA_P256                1
 #define EN_ED25519                   1
-#define EN_ECDSA_P256                0
-#define EN_TLS                       0
+#define EN_TLS                       1
 #define EN_SHA256_TEST               0
 #define EN_SHA512_TEST               0
 #define EN_X25519_TEST               0
-#define EN_ED25519_TEST              0
+#define EN_BLAKE2S_TEST              0
+#define EN_CHACHA20_POLY1305_TEST    0
 #define EN_ECDSA_P256_TEST           0
+#define EN_ED25519_TEST              0
 #define EN_AES_GCM_SW_TEST           0
 #define EN_KEYSTORE_SERVICE          1
 #define EN_AES_CHANNEL_SERVICE       1
 #define SSH_AUTHORIZED_ED25519_PUB   { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }
+
+/* ===========================================================================
+ * STDOUT/STDIN CONFIGURATION
+ * =========================================================================== */
+#define CONSOLE_RX_BUF_SIZE          256U
 
 /* ===========================================================================
  * CLI CONFIGURATION
@@ -296,8 +325,8 @@
 #define STDIN_ON_UART                1
 #define STDIN_ON_USB_CDC             0
 #define STDIN_ON_LPUART              0
-#define STDIN_ON_USB_NCM             0
 #define EN_CLI_LED                   1
+#define STDIN_ON_USB_NCM             0
 #define EN_CLI_ARP                   1
 #define EN_CLI_DHCP                  1
 #define EN_CLI_NTP                   1
@@ -310,6 +339,7 @@
 #define EN_CLI_IPERF                 1
 #define EN_CLI_HTTP                  1
 #define EN_CLI_HTTPS                 0
+#define EN_CLI_VNC                   1
 #define EN_CLI_TRACE                 0
 #define EN_CLI_UDP_SRV               1
 #define EN_CLI_RTC                   1
@@ -341,8 +371,10 @@
 #define EN_CLI_SHA256                1
 #define EN_CLI_SHA512                1
 #define EN_CLI_X25519                1
-#define EN_CLI_ED25519               1
+#define EN_CLI_BLAKE2S               1
+#define EN_CLI_CHACHA20_POLY1305     1
 #define EN_CLI_ECDSA_P256            0
+#define EN_CLI_ED25519               1
 #define EN_CLI_CALLTO                1
 #define EN_CLI_FAT                   1
 #endif
@@ -357,6 +389,12 @@
  * SYSTEM CONFIGURATION
  * =========================================================================== */
 #define POOL_QUEUE_SIZE              8
+#define EN_PYTHON                    0
+#if ( EN_PYTHON )
+#define UPY_HEAP_SIZE                65536U
+#define UPY_MAX_THREADS              4U
+#define EN_UPY_AUTOSTART             0
+#endif
 
 /* ===========================================================================
  * EVAL_ MACROS (generated: every symbol is already defined above)
@@ -436,31 +474,6 @@
 #else
 #define EVAL_TAMP(...)
 #endif
-#if ( EN_FMAC )
-#define EVAL_FMAC(...)   __VA_ARGS__
-#else
-#define EVAL_FMAC(...)
-#endif
-#if ( EN_SAI )
-#define EVAL_SAI(...)   __VA_ARGS__
-#else
-#define EVAL_SAI(...)
-#endif
-#if ( EN_SPDIFRX )
-#define EVAL_SPDIFRX(...)   __VA_ARGS__
-#else
-#define EVAL_SPDIFRX(...)
-#endif
-#if ( EN_DMA2D )
-#define EVAL_DMA2D(...)   __VA_ARGS__
-#else
-#define EVAL_DMA2D(...)
-#endif
-#if ( EN_JPEG )
-#define EVAL_JPEG(...)   __VA_ARGS__
-#else
-#define EVAL_JPEG(...)
-#endif
 #if ( EN_SDIO )
 #define EVAL_SDIO(...)   __VA_ARGS__
 #else
@@ -531,11 +544,6 @@
 #else
 #define EVAL_TCP_SVC(...)
 #endif
-#if ( EN_TCP_TRACE )
-#define EVAL_TCP_TRACE(...)   __VA_ARGS__
-#else
-#define EVAL_TCP_TRACE(...)
-#endif
 #if ( EN_MQTT_SERVICE )
 #define EVAL_MQTT_SVC(...)   __VA_ARGS__
 #else
@@ -551,15 +559,15 @@
 #else
 #define EVAL_IPERF_SVC(...)
 #endif
-#if ( EN_HTTP_SERVICE )
-#define EVAL_HTTP_SVC(...)   __VA_ARGS__
-#else
-#define EVAL_HTTP_SVC(...)
-#endif
 #if ( EN_HTTPS_SERVICE )
 #define EVAL_HTTPS_SVC(...)   __VA_ARGS__
 #else
 #define EVAL_HTTPS_SVC(...)
+#endif
+#if ( EN_HTTP_SERVICE )
+#define EVAL_HTTP_SVC(...)   __VA_ARGS__
+#else
+#define EVAL_HTTP_SVC(...)
 #endif
 #if ( EN_CRC )
 #define EVAL_CRC(...)   __VA_ARGS__
@@ -611,15 +619,15 @@
 #else
 #define EVAL_LPUART_STD(...)
 #endif
-#if ( EN_FAT_SERVICE )
-#define EVAL_FAT_SVC(...)   __VA_ARGS__
-#else
-#define EVAL_FAT_SVC(...)
-#endif
 #if ( EN_IP_DEFRAG )
 #define EVAL_IP_DEFRAG(...)   __VA_ARGS__
 #else
 #define EVAL_IP_DEFRAG(...)
+#endif
+#if ( EN_IP_FRAG )
+#define EVAL_IP_FRAG(...)   __VA_ARGS__
+#else
+#define EVAL_IP_FRAG(...)
 #endif
 #if ( EN_PWR )
 #define EVAL_PWR(...)   __VA_ARGS__
@@ -651,15 +659,25 @@
 #else
 #define EVAL_X25519_TEST(...)
 #endif
-#if ( EN_ED25519_TEST && EN_ED25519 )
-#define EVAL_ED25519_TEST(...)   __VA_ARGS__
+#if ( EN_BLAKE2S_TEST && EN_BLAKE2S )
+#define EVAL_BLAKE2S_TEST(...)   __VA_ARGS__
 #else
-#define EVAL_ED25519_TEST(...)
+#define EVAL_BLAKE2S_TEST(...)
+#endif
+#if ( EN_CHACHA20_POLY1305_TEST && EN_CHACHA20_POLY1305 )
+#define EVAL_CHACHA20_POLY1305_TEST(...)   __VA_ARGS__
+#else
+#define EVAL_CHACHA20_POLY1305_TEST(...)
 #endif
 #if ( EN_ECDSA_P256_TEST && EN_ECDSA_P256 )
 #define EVAL_ECDSA_P256_TEST(...)   __VA_ARGS__
 #else
 #define EVAL_ECDSA_P256_TEST(...)
+#endif
+#if ( EN_ED25519_TEST && EN_ED25519 )
+#define EVAL_ED25519_TEST(...)   __VA_ARGS__
+#else
+#define EVAL_ED25519_TEST(...)
 #endif
 #if ( EN_AES_GCM_SW_TEST && EN_AES )
 #define EVAL_AES_GCM_SW_TEST(...)   __VA_ARGS__
@@ -675,6 +693,11 @@
 #define EVAL_TFTP_SVC(...)   __VA_ARGS__
 #else
 #define EVAL_TFTP_SVC(...)
+#endif
+#if ( EN_PYTHON && EN_UPY_AUTOSTART )
+#define EVAL_UPY_AUTOSTART(...)   __VA_ARGS__
+#else
+#define EVAL_UPY_AUTOSTART(...)
 #endif
 
 /* ===========================================================================

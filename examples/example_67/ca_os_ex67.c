@@ -99,7 +99,7 @@ static const ca_ipv4_t s_ip = { .v = { 192U, 168U, 10U, 67U } };
 
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .v = { 192U, 168U, 10U, 67U } },
-    .mac  = { .v = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x67U } },
+    .mac  = CA_EXAMPLE_MAC(67),
     .udp  = { .bindings = {{0}}, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -111,7 +111,7 @@ static void on_link_change(bool up);
 static ca_eth_cfg_t eth_cfg = {
     .phy_addr = 0U,
     .rmii     = true,
-    .mac      = { .v = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x67U } },
+    .mac      = CA_EXAMPLE_MAC(67),
     .link_cb  = on_link_change,
 };
 
@@ -156,7 +156,7 @@ static void eth_gpio_init(void)
  * static ca_usb_ncm_cfg_t s_ncm = {
  *     .header = { CA_USB_TYPE_NCM, &ca_usb_ncm_ops },
  *     .mps    = 64U,
- *     .mac    = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0xA7U },
+ *     .mac    = CA_EXAMPLE_MAC_HOST(67),
  *     .on_rx is set by ca_ncm_iface_get()
  * };
  * ---------------------------------------------------------------------- */

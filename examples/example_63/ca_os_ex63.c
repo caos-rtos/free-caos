@@ -247,18 +247,10 @@ static u32 task_frame(void *arg)
 
 /* ---- CLI "u63" on CDC console ---- */
 #if ENABLE_CLI
-static bool ex63_cli_handler(c_str *pcmd)
+/* u63 — the line arrives without the command word */
+static bool u63_cmd(c_str *args)
 {
-    c_str cmd = *pcmd;
-    const char *p = ca_skip_sp(cmd->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("u63: info | abort");
-        return false;
-    }
-    if (ca_strncmp(p, "u63", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
-
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "info", 4) == 0) {
         CLI_PRINTF_N("frames  : %u  (echo %u)", s_cnt_frames, s_cnt_echo);
         CLI_PRINTF_N("bytes   : %u", s_cnt_bytes);
@@ -275,11 +267,16 @@ static bool ex63_cli_handler(c_str *pcmd)
         CLI_PUT_N("u63: rx aborted, header mode restored");
         return true;
     }
-    CLI_PUT_N("u63: info | abort");
-    return false;
+    return false;                   /* cli prints the help line */
 }
 
-static ca_cli_node_t s_ex63_cli_node = { ex63_cli_handler, NULL };
+static const ca_cli_cmd_t s_u63_cmds[] = {
+    { "u63", "u63       : info | abort", { u63_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_u63_table = {
+    "u63", s_u63_cmds, (u16)(sizeof(s_u63_cmds) / sizeof(s_u63_cmds[0])), NULL
+};
 #endif
 
 /* ---- entry points ---- */
@@ -302,7 +299,7 @@ void ca_os_configure(void)
     if (!ca_uart_init_dma(EX63_UART, EX63_BAUD, ex63_on_rx, 0U))
         CA_SAFEGUARD(0, "ex63: init uart dma failed");
 
-    EVAL_CLI( ca_cli_register(&s_ex63_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_u63_table); )
 }
 
 void ca_os_main(void)

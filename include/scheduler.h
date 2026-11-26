@@ -160,6 +160,17 @@ typedef u32 (*ca_task_fn_t)(void *arg);
 typedef u32 ca_task_handle_t;
 #define CA_TASK_HANDLE_NONE   0xFFFFFFFFU
 
+/* ---- Owner of a resource (task_reaper.md, level 0) -------------------------
+ * A resource that outlives a call (a TCP listener, a connection) records who
+ * opened it: the task's handle AND its restart count, because a restart keeps
+ * the handle while the task starts over and forgets what it had opened.
+ * h == CA_TASK_HANDLE_NONE: opened before the scheduler, owned by the system,
+ * never reclaimed. */
+typedef struct {
+    ca_task_handle_t h;
+    u16              n_restart;
+} ca_task_owner_t;
+
 typedef void (*ca_emergency_fn_t)(ca_task_handle_t h, u32 emerg_param);
 /**
  * @brief Process Control Block (PCB) - Thread Context
@@ -428,6 +439,13 @@ bool ca_scheduler_dump_task(u16 index,  u16 mode);
 void ca_scheduler_dump_all_tasks( u16 mode);
 
 /**
+ * @brief Print the stack table: size, used, free, PSP and floor check per task,
+ *        then the free space of the stack arena and its largest free block
+ * @param index Task index, or a negative value for every task
+ */
+void ca_scheduler_stack_report(i32 index);
+
+/**
  * @brief Print compact info of all tasks (CPU% and Stack% on one line)
  * @note Format: task 'name' CPU=X.Y% Stack=Z.W%
  * @note -m : memory status per thread =3
@@ -579,6 +597,11 @@ u32 ca_os_stack_from_handle(ca_task_handle_t h);
 ca_task_handle_t ca_os_task_handle(const ca_thread_context_t *ctx);
 /** @brief Handle of the calling task */
 ca_task_handle_t ca_os_self_handle(void);
+/** @brief Owner record of the calling task (system before the scheduler) */
+ca_task_owner_t ca_os_self_owner(void);
+/** @brief false if that task has ended or restarted since the record was
+ *  taken; always true for the system owner. Read-only, no lock. */
+bool ca_os_owner_alive(ca_task_owner_t o);
 /** @brief Handle of the task at a thid NOW - e.g. a number typed at the CLI,
  *  which is only a position and must be converted at once */
 ca_task_handle_t ca_os_handle_from_thid(u32 thid);

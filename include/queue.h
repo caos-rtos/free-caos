@@ -93,9 +93,11 @@ typedef struct {
  */
 /* Union: ca_queue_static_t view (flexible array) + sized raw storage.
  * ALWAYS access via .q — never cast the union to ca_queue_static_t*
- * (strict-aliasing UB). Punning via union is legal (C11 6.5.2.3). */
+ * (strict-aliasing UB). Punning via union is legal (C11 6.5.2.3).
+ * The union is tagged NAME_qu, not anonymous (no anonymous types in caOS);
+ * a tag and not a typedef, so callers can still write `static` before it. */
 #define CAQUEUE_STATIC_DEFINE(NAME, MAX_ITEM, ITEM_SIZE) \
-    union { \
+    union NAME##_qu { \
         ca_queue_static_t q; \
         u8 raw[sizeof(ca_queue_static_t) + (MAX_ITEM) * (ITEM_SIZE)]; \
     } NAME = { .q = { \

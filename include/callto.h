@@ -29,7 +29,7 @@
 #if EN_CLI_CALLTO && ENABLE_CLI
 
 /**
- * @brief Registers the 'callto' node on the CLI chain.
+ * @brief Registers the 'callto' command table.
  *
  * Called by ca_cli_init(): the command exists wherever EN_CLI_CALLTO is on,
  * with nothing for the example to remember. A flag that switches a feature on

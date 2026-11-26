@@ -216,16 +216,10 @@ static void early(ca_wdt_type_t type, u32 ms, bool hog)
 /* =============================================================================
  * CLI "e10"
  * ============================================================================= */
-static bool ex10_cli_handler(c_str *pcmd)
+/* e10 — the line arrives without the command word */
+static bool e10_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("e10       : start | bite iwdg [ms] | bite wwdg | early iwdg [ms] [hog] | early wwdg [hog] | info");
-        return false;
-    }
-    if (ca_strncmp(p, "e10", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
-
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "start", 5) == 0) {
         if (s_busy) { CLI_PUT_N("e10: a pass is already running"); return true; }
         s_busy = true;
@@ -275,7 +269,13 @@ static bool ex10_cli_handler(c_str *pcmd)
     return true;
 }
 
-static ca_cli_node_t s_ex10_cli_node = { ex10_cli_handler, NULL };
+static const ca_cli_cmd_t s_e10_cmds[] = {
+    { "e10", "e10       : start | bite iwdg [ms] | bite wwdg | early iwdg [ms] [hog] | early wwdg [hog] | info", { e10_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_e10_table = {
+    "e10", s_e10_cmds, (u16)(sizeof(s_e10_cmds) / sizeof(s_e10_cmds[0])), NULL
+};
 
 /* =============================================================================
  * caOS hooks
@@ -291,7 +291,7 @@ void ca_os_configure(void)
         ca_cli_init(4096);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_ex10_cli_node);
+        ca_cli_register_table(&s_e10_table);
     )
     EVAL_USB_CDC_STD(ca_usb_dev_mng_cdc_cli();)
     ca_sem_init(&s_start_sem, "E10GO", 0U, 1U);

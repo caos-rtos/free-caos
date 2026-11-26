@@ -49,11 +49,17 @@
 #include "sw_timer.h"
 #include "utils.h"
 #include "cli.h"
+#include "console.h"
+#include "python.h"
 #include "callto.h"
 #include "sha256.h"
 #include "kdf.h"
 #include "sha512.h"
 #include "x25519.h"
+#include "chacha20.h"
+#include "poly1305.h"
+#include "aead_chacha20poly1305.h"
+#include "blake2s.h"
 #include "ed25519.h"
 #include "ecdsa_p256.h"
 #include "keys_store.h"
@@ -72,6 +78,8 @@
 #include "sai.h"
 #include "spdifrx.h"
 #include "dma2d.h"
+#include "fb.h"
+#include "gfx_lvgl.h"
 #include "jpeg.h"
 #include "opamp.h"
 #include "temp_sensor.h"
@@ -101,6 +109,7 @@
 #include "net_utils.h"
 #include "arp_service.h"
 #include "ip_defrag.h"
+#include "ip_frag.h"
 #include "route_service.h"
 #include "udp_server.h"
 #include "udp_client.h"
@@ -114,6 +123,7 @@
 #include "modbus_service.h"
 #include "iperf_service.h"
 #include "http_service.h"
+#include "vnc_service.h"
 #include "tftp_service.h"
 #include "boot_image.h"
 #include "ssh_service.h"
@@ -149,6 +159,8 @@ extern void ca_os_run(bool active);
 extern void ca_os_end(u32 image);
 /* banner os */
 extern void ca_os_banner(void);
+/** true while the boot banner task is still printing */
+extern bool ca_os_banner_running(void);
 /* direct banner printing (no task): callable from task or ISR context,
    useful for reprinting it when a USB CDC terminal opens (DTR on). */
 extern u32 ca_system_banner(void *arg);

@@ -98,24 +98,17 @@
  * ════════════════════════════════════════════════════════════════════════════ */
 
 #define CDC_MPS       64U
-#define RX_RING_SIZE  512U
 #define NOTIFY_RX     (1U << 0)
 
-static volatile u8  s_rx_ring[RX_RING_SIZE];
-static volatile u16 s_rx_head;          /* written by ISR (on_rx) */
-static volatile u16 s_rx_tail;          /* read by task_echo */
 /* Handle, not thid: a thid is a list position and moves when a task below it ends. */
 static ca_task_handle_t s_echo_task = CA_TASK_HANDLE_NONE;
 static volatile u8  s_dtr;              /* last known DTR state */
 
-static void cdc_rx(const u8 *buf, u16 len)
+/* PULL mode: the ISR only wakes the echo task, which drains with
+ * ca_usb_cdc_read(). Unread packets stay in the driver queue and the endpoint
+ * NAKs the host: a flood is slowed down, never dropped (the old ISR ring was). */
+static void cdc_rx_ready(void)
 {
-    for (u16 i = 0U; i < len; i++) {
-        u16 next = (u16)((s_rx_head + 1U) % RX_RING_SIZE);
-        if (next == s_rx_tail) break;          /* ring full: drop */
-        s_rx_ring[s_rx_head] = buf[i];
-        s_rx_head = next;
-    }
     ca_notify_send_handle_isr(s_echo_task, NOTIFY_RX, CA_NOTIFY_ACTION_SET_BITS);
 }
 
@@ -133,7 +126,7 @@ static void cdc_line(const ca_usb_cdc_line_t *line, u8 control)
 static const ca_usb_cdc_cfg_t s_cdc = {
     .header  = { CA_USB_TYPE_CDC, &ca_usb_cdc_ops },
     .mps     = CDC_MPS,
-    .on_rx   = cdc_rx,
+    .on_rx_ready = cdc_rx_ready,
     .on_line = cdc_line,
 };
 
@@ -143,12 +136,10 @@ static u32 task_echo(void *arg)
     static string msg;
     while (1) {
         (void)ca_notify_wait(true, 2000U);
-        u16 n = 0U;
-        while (s_rx_tail != s_rx_head && n < sizeof(msg.data)) {
-            msg.data[n++] = (char)s_rx_ring[s_rx_tail];
-            s_rx_tail = (u16)((s_rx_tail + 1U) % RX_RING_SIZE);
-        }
-        if (n > 0U) {
+        /* Drain everything that is pending: one notify can stand for several
+         * packets, and a packet can be bigger than a string (512 B at HS). */
+        u16 n;
+        while ((n = ca_usb_cdc_read((u8 *)msg.data, (u16)sizeof(msg.data))) > 0U) {
             msg.size = n;
             while (!ca_usb_cdc_write(&msg))
                 ca_os_yield();
@@ -203,7 +194,7 @@ static const ca_ipv4_t s_ip  = { .v = { 192U, 168U, 10U, 56U } };
 
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .v = { 192U, 168U, 10U, 56U } },
-    .mac  = { .v = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0x56U } },
+    .mac  = CA_EXAMPLE_MAC(56),
     .udp  = { .bindings = {{0}}, .count = 0U },
     .icmp = { .echo_reply = true },
 };
@@ -211,7 +202,7 @@ static const ca_net_cfg_t net_cfg = {
 static ca_usb_ncm_cfg_t s_ncm = {
     .header = { CA_USB_TYPE_NCM, &ca_usb_ncm_ops },
     .mps    = 64U,
-    .mac    = { 0x02U, 0xCAU, 0x05U, 0x00U, 0x00U, 0xA6U },  /* host-side MAC */
+    .mac    = CA_EXAMPLE_MAC_HOST(56),  /* host-side MAC */
     /* .on_rx set by ca_ncm_iface_get() */
 };
 

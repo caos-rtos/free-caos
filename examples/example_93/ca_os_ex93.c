@@ -298,12 +298,10 @@ static u32 task_report(void *arg)
 }
 
 #if ENABLE_CLI
-static bool ex93_cli(c_str *pcmd)
+/* s93 — the line arrives without the command word */
+static bool s93_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) { CLI_PUT_N("s93: info | buf | wire 0|1|end"); return false; }
-    if (ca_strncmp(p, "s93", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "wire", 4) == 0) {
         p = ca_skip_sp(p + 4);
         if (ca_strncmp(p, "end", 3) == 0) {
@@ -362,10 +360,15 @@ static bool ex93_cli(c_str *pcmd)
         CLI_PRINTF_N("first_err idx: %u", s_first_err);
         return true;
     }
-    CLI_PUT_N("s93: info | buf | wire 0|1|end");
-    return false;
+    return false;                   /* cli prints the help line */
 }
-static ca_cli_node_t s_cli = { ex93_cli, NULL };
+static const ca_cli_cmd_t s_s93_cmds[] = {
+    { "s93", "s93       : info | buf | wire 0|1|end", { s93_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_s93_table = {
+    "s93", s_s93_cmds, (u16)(sizeof(s_s93_cmds) / sizeof(s_s93_cmds[0])), NULL
+};
 #endif
 
 void ca_os_configure(void)
@@ -397,7 +400,7 @@ void ca_os_configure(void)
                       CA_GPIO_SPEED_LOW, CA_GPIO_PULLUP, 0);
     if (!ca_exti_init((u8)EX93_CS_PORT, 14U, CA_EXTI_EDGE_FALLING, cs_falling))
         CA_SAFEGUARD(0, "ex93: CS EXTI init failed");
-    EVAL_CLI( ca_cli_register(&s_cli); )
+    EVAL_CLI( ca_cli_register_table(&s_s93_table); )
 }
 
 void ca_os_main(void)

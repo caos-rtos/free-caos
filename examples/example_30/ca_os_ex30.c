@@ -28,7 +28,7 @@
  *   task_poll_btn : polling the B1 pin every 100 ms — logs state changes
  *   task_monitor  : logs each EXTI press, toggles LED2 every 5
  *   task_heartbeat: blink LED3 1 Hz + periodic log
- *   CLI hook      : commands exti_on / exti_off / btn
+ *   CLI table     : commands exti_on / exti_off / btn
  *
  * REQUIREMENTS os_config.h:
  *   EN_EXTI  1
@@ -268,50 +268,64 @@ static void tamper_cli(const char *p)
  * CLI HOOK — user commands: exti_on / exti_off / btn
  * ========================================================================== */
 
-static bool user_cli_handler(c_str *pcmd)
-{
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("exti_on | exti_off | btn");
-        EVAL_TAMP( CLI_PUT_N("tamper arm | check | off"); )
-        return false;
-    }
+/* one entry per command word; each gets the line without its word */
 #if EN_TAMP
-    if (ca_strncmp(p, "tamper", 6) == 0) {
-        tamper_cli(ca_skip_sp(p + 6));
-        return true;
-    }
-#endif
-    if (ca_strncmp(p, "exti_on", 7) == 0) {
-        /* task_poll_btn owns the EXTI setup: enabling the line before it ran
-         * would arm a callback the driver has not configured yet. */
-        if (!g_hw_ready) {
-            CLI_PUT_N("EX30: hardware not ready yet, retry in a moment");
-            return true;
-        }
-        g_last_edge_ms = ca_os_tick_ms() - DEBOUNCE_MS;  /* accept the next edge */
-        ca_exti_enable(BTN_PIN);
-        g_exti_on = true;
-        CLI_PUT_N("EX30: EXTI enabled (RISING edge on the B1 pin)");
-        return true;
-    }
-    if (ca_strncmp(p, "exti_off", 8) == 0) {
-        ca_exti_disable(BTN_PIN);
-        g_exti_on = false;
-        CLI_PUT_N("EX30: EXTI disabled");
-        return true;
-    }
-    if (ca_strncmp(p, "btn", 3) == 0) {
-        u32 v = ca_gpio_read(BTN_PORT, BTN_PIN);
-        const bool pressed = (v == BTN_PRESSED_LVL);
-        CLI_PRINTF_N("EX30: " BTN_TXT "=%u (%s)", v,
-                     v ? (pressed ? "HIGH(pressed)" : "HIGH(released)")
-                       : (pressed ? "LOW(pressed)"  : "LOW(released)"));
-        return true;
-    }
-    return false;
+static bool tamper_cmd(c_str *args)
+{
+    const char *p = (*args)->data;
+    tamper_cli(ca_skip_sp(p));
+    return true;
 }
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
+#endif
+
+static bool exti_on_cmd(c_str *args)
+{
+    (void)args;
+    /* task_poll_btn owns the EXTI setup: enabling the line before it ran
+     * would arm a callback the driver has not configured yet. */
+    if (!g_hw_ready) {
+        CLI_PUT_N("EX30: hardware not ready yet, retry in a moment");
+        return true;
+    }
+    g_last_edge_ms = ca_os_tick_ms() - DEBOUNCE_MS;  /* accept the next edge */
+    ca_exti_enable(BTN_PIN);
+    g_exti_on = true;
+    CLI_PUT_N("EX30: EXTI enabled (RISING edge on the B1 pin)");
+    return true;
+}
+
+static bool exti_off_cmd(c_str *args)
+{
+    (void)args;
+    ca_exti_disable(BTN_PIN);
+    g_exti_on = false;
+    CLI_PUT_N("EX30: EXTI disabled");
+    return true;
+}
+
+static bool btn_cmd(c_str *args)
+{
+    (void)args;
+    u32 v = ca_gpio_read(BTN_PORT, BTN_PIN);
+    const bool pressed = (v == BTN_PRESSED_LVL);
+    CLI_PRINTF_N("EX30: " BTN_TXT "=%u (%s)", v,
+                 v ? (pressed ? "HIGH(pressed)" : "HIGH(released)")
+                   : (pressed ? "LOW(pressed)"  : "LOW(released)"));
+    return true;
+}
+
+static const ca_cli_cmd_t s_user_cmds[] = {
+#if EN_TAMP
+    { "tamper", "tamper    : arm | check | off  tamper input", { tamper_cmd, STACK_MEDIUM } },
+#endif
+    { "exti_on", "exti_on   : enable the EXTI on the user button", { exti_on_cmd, STACK_MEDIUM } },
+    { "exti_off", "exti_off  : disable the EXTI", { exti_off_cmd, STACK_MEDIUM } },
+    { "btn", "btn       : read the user button", { btn_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_user_table = {
+    "user", s_user_cmds, (u16)(sizeof(s_user_cmds) / sizeof(s_user_cmds[0])), NULL
+};
 
 /* ============================================================================
  * TASK POLL BTN — polling the B1 pin, logs state changes
@@ -444,7 +458,7 @@ void ca_os_configure(void)
         ca_cli_init(4096);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_user_cli_node); 
+        ca_cli_register_table(&s_user_table); 
     )
     
     EVAL_USB_CDC_STD(ca_usb_dev_mng_cdc_cli();)

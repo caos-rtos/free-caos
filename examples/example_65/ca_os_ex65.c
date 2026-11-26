@@ -276,12 +276,10 @@ static u32 task_master(void *arg)
 }
 
 #if ENABLE_CLI
-static bool ex65_cli(c_str *pcmd)
+/* s65 — the line arrives without the command word */
+static bool s65_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) { CLI_PUT_N("s65: info | slow <us> | wire 0|1|end"); return false; }
-    if (ca_strncmp(p, "s65", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "wire", 4) == 0) {
         p = ca_skip_sp(p + 4);
         if (ca_strncmp(p, "end", 3) == 0) {
@@ -327,10 +325,15 @@ static bool ex65_cli(c_str *pcmd)
         else           CLI_PUT_N("s65 slow: off, DMA burst");
         return true;
     }
-    CLI_PUT_N("s65: info | slow <us> | wire 0|1|end");
-    return false;
+    return false;                   /* cli prints the help line */
 }
-static ca_cli_node_t s_cli = { ex65_cli, NULL };
+static const ca_cli_cmd_t s_s65_cmds[] = {
+    { "s65", "s65       : info | slow <us> | wire 0|1|end", { s65_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_s65_table = {
+    "s65", s_s65_cmds, (u16)(sizeof(s_s65_cmds) / sizeof(s_s65_cmds[0])), NULL
+};
 #endif
 
 void ca_os_configure(void)
@@ -360,7 +363,7 @@ void ca_os_configure(void)
     ca_gpio_configure(EX65_CS_PORT, EX65_CS_PIN, CA_GPIO_MODE_OUTPUT, CA_GPIO_OTYPE_PP,
                       CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
     ca_gpio_write(EX65_CS_PORT, EX65_CS_PIN, 1U);
-    EVAL_CLI( ca_cli_register(&s_cli); )
+    EVAL_CLI( ca_cli_register_table(&s_s65_table); )
 }
 
 void ca_os_main(void)

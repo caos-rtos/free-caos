@@ -49,6 +49,17 @@ void ca_memory_init(u32 *heap_start, u32 *heap_end);
  * @return Pointer to the allocated memory, NULL if it fails
  */
 void *ca_memory_allocate(u32 size);
+#if EN_TAMP
+/* Secret area: the RAM that a confirmed tamper erases in hardware (SRAM2 on
+ * U575/H563, CA_SECRET_AREA_* in objmap.h, 64 KB). caOS reserves it itself,
+ * right after the heap is set up (caos.c), as one heap block that is never
+ * freed: no other allocation ever lands where a tamper would erase it. On the
+ * H563 SRAM2 is only 32 KB below the top of the heap. keys_store takes its
+ * area from here; what it leaves is the application's to use.
+ * ca_memory_secret: the area, NULL (*size = 0) where the part has none. */
+void *ca_memory_reserve_secret(u32 *size);   /* caos.c at boot; idempotent */
+void *ca_memory_secret(u32 *size);
+#endif
 
 /**
  * @brief Allocates memory that belongs to no task

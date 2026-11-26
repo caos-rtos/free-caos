@@ -257,20 +257,10 @@ static void ex104_wire(void)
 }
 
 #if ENABLE_CLI
-static void ex104_usage(void)
+/* spdif — the line arrives without the command word */
+static bool spdif_cmd(c_str *args)
 {
-    CLI_PUT_N("spdif     : test [fs] | all | info");
-    CLI_PUT_N("wire      : SD_A -> SPDIFRX_IN jumper continuity as plain GPIO, then reboot");
-}
-
-static bool ex104_cli(c_str *pcmd)
-{
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) { ex104_usage(); return false; }
-    if (ca_strncmp(p, "wire", 4) == 0) { ex104_wire(); return true; }
-    if (ca_strncmp(p, "spdif", 5) != 0) return false;
-    p = ca_skip_sp(p + 5);
-
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "all", 3) == 0) { ex104_all(); return true; }
     if (ca_strncmp(p, "info", 4) == 0) {
         CLI_PRINTF_N("SPDIF fs %u -> SAI %u Hz, SPDIFRX_CLK %u Hz, measured %u Hz, errors %02X",
@@ -284,10 +274,24 @@ static bool ex104_cli(c_str *pcmd)
         ex104_test();
         return true;
     }
-    ex104_usage();
+    return false;                   /* cli prints the help line */
+}
+
+static bool wire_cmd(c_str *args)
+{
+    (void)args;
+    ex104_wire();
     return true;
 }
-static ca_cli_node_t s_cli = { ex104_cli, NULL };
+
+static const ca_cli_cmd_t s_ex104_cmds[] = {
+    { "spdif", "spdif     : test [fs] | all | info", { spdif_cmd, STACK_MEDIUM } },
+    { "wire", "wire      : SD_A -> SPDIFRX_IN jumper continuity as plain GPIO, then reboot", { wire_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_ex104_table = {
+    "ex104", s_ex104_cmds, (u16)(sizeof(s_ex104_cmds) / sizeof(s_ex104_cmds[0])), NULL
+};
 #endif
 
 PRIVATE_STRING(why, "ex104: this part has no SPDIFRX (F446, F767 and H753 have it)");
@@ -313,7 +317,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_cli);
+        ca_cli_register_table(&s_ex104_table);
     )
 }
 

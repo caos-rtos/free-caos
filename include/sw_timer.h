@@ -73,6 +73,7 @@ typedef struct {
     ca_sw_timer_mode_t mode;           /* One-shot or periodic */
     ca_sw_timer_state_t state;         /* Current state */
     u8 active;                  /* 1 = slot used, 0 = free */
+    ca_task_owner_t owner;      /* creator: slot reclaimed once it ends */
 } ca_sw_timer_t;
 
 /** Timer handle (index + 1, 0 = invalid) */
@@ -98,9 +99,23 @@ bool ca_sw_timer_init(void);
  * @param callback Function to call upon expiration
  * @param arg Argument passed to the callback
  * @return Timer handle (CA_TIMER_INVALID if error)
+ * @note The timer belongs to the calling task: once that task ends or is
+ *       restarted the timer is dropped (no callback, slot reused), because
+ *       arg may point into its freed heap. Created before the scheduler =
+ *       owned by the system, never dropped. See ca_sw_timer_detach().
  */
 ca_sw_timer_handle_t ca_sw_timer_create(u32 period_ms, ca_sw_timer_mode_t mode,
                                ca_timer_callback_t callback, void *arg);
+
+/**
+ * @brief Hands a timer over to the system: it survives its creator
+ * @param handle Timer handle
+ * @return true if ok
+ * @note Only for callbacks that touch no memory of the creating task
+ *       (statics only). Typical use: a timer created by a CLI command,
+ *       whose cli_cmd task ends with the command.
+ */
+bool ca_sw_timer_detach(ca_sw_timer_handle_t handle);
 
 /**
  * @brief Starts a timer

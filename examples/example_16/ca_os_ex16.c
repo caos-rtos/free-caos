@@ -184,43 +184,49 @@ static u32 task_monitor(void *arg) {
 }
 
 /* ============================================================================
- * CLI — chain of responsibility
+ * CLI — command table
  * ========================================================================== */
 
-static bool user_cli_handler(c_str *pcmd);
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
 
-static bool user_cli_handler(c_str *pcmd)
+/* one entry per command word; each gets the line without its word */
+static bool start_cmd(c_str *args)
 {
-    c_str cmd = *pcmd;
-    const char *p = ca_skip_sp(cmd->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("ex16: start | stop | show  (rng get - driver)");
-        return false;
-    }
-    if (ca_strncmp(p, "start", 5) == 0) {
-        print_digest = 1;
-        CLI_PUT_N("verbose ON");
-        return true;
-    }
-    if (ca_strncmp(p, "stop", 4) == 0) {
-        print_digest = 0;
-        CLI_PUT_N("verbose OFF");
-        return true;
-    }
-    if (ca_strncmp(p, "show", 4) == 0) {
-        u8 busy, free_th, queued;
-        ca_pool_stats(&busy, &free_th, &queued);
-        CLI_PRINTF_N("submitted=%u  done=%u  failed=%u  rejected=%u  "
-                     "busy=%u/%u  queued=%u/%u",
-                     jobs_submitted, jobs_done, jobs_failed, jobs_rejected,
-                     (u32)busy, (u32)POOL_THREADS,
-                     (u32)queued, (u32)POOL_QUEUE_SIZE);
-        return true;
-    }
-    return false;
+    (void)args;
+    print_digest = 1;
+    CLI_PUT_N("verbose ON");
+    return true;
 }
+
+static bool stop_cmd(c_str *args)
+{
+    (void)args;
+    print_digest = 0;
+    CLI_PUT_N("verbose OFF");
+    return true;
+}
+
+static bool show_cmd(c_str *args)
+{
+    (void)args;
+    u8 busy, free_th, queued;
+    ca_pool_stats(&busy, &free_th, &queued);
+    CLI_PRINTF_N("submitted=%u  done=%u  failed=%u  rejected=%u  "
+                 "busy=%u/%u  queued=%u/%u",
+                 jobs_submitted, jobs_done, jobs_failed, jobs_rejected,
+                 (u32)busy, (u32)POOL_THREADS,
+                 (u32)queued, (u32)POOL_QUEUE_SIZE);
+    return true;
+}
+
+static const ca_cli_cmd_t s_user_cmds[] = {
+    { "start", "start     : print every digest (verbose on)", { start_cmd, STACK_MEDIUM } },
+    { "stop", "stop      : stop printing digests", { stop_cmd, STACK_MEDIUM } },
+    { "show", "show      : pool and job counters", { show_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_user_table = {
+    "user", s_user_cmds, (u16)(sizeof(s_user_cmds) / sizeof(s_user_cmds[0])), NULL
+};
 
 /* ============================================================================
  * ca_os_configure — init modules
@@ -275,7 +281,7 @@ void ca_os_main(void) {
               STACK_SMALL, CA_JOB_STD, CA_FAULT_ASSERT);
 
     /* Register CLI */
-    EVAL_CLI( ca_cli_register(&s_user_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_user_table); )
 
     ca_os_run(true);
 }

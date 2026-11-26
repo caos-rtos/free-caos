@@ -27,7 +27,7 @@ string(TOLOWER "${CURR_MCU}" MCU_LC)
 include(${BOARD_DIR}/mcu.cmake)
 
 # --- the precompiled libraries ------------------------------------------------
-foreach(_lib caOS caOS_${CURR_MCU} fatfs)
+foreach(_lib caOS caOS_${CURR_MCU} fatfs lvgl)
     add_library(${_lib} STATIC IMPORTED)
     set_target_properties(${_lib} PROPERTIES IMPORTED_LOCATION ${BOARD_DIR}/lib${_lib}.a)
 endforeach()
@@ -40,10 +40,14 @@ set(CAOS_INCLUDES
     ${CMAKE_SOURCE_DIR}/external/fatfs/source
     ${CMAKE_SOURCE_DIR}/external/caos_fatfs
     ${CMAKE_SOURCE_DIR}/external/thread-metric-benchmark/include
+    ${CMAKE_SOURCE_DIR}/external/caos_lvgl         # lv_conf.h (fixed: the one liblvgl.a was built with)
+    ${CMAKE_SOURCE_DIR}/external/lvgl              # lvgl.h
 )
-set(CAOS_C_OPTIONS ${MCU_OPTIONS} -std=gnu11 -mthumb -Wall --specs=nano.specs)
-set(CAOS_LINK_OPTIONS ${MCU_OPTIONS} --specs=nano.specs -T${MCU_LINKER_SCRIPT}
-    -Wl,--gc-sections -static)
+# No newlib (as the caOS build): -nostdlib, libgcc only; memcpy, memset, ...
+# come from libcaOS.a (libc_shim.c), declared by include/string.h
+set(CAOS_C_OPTIONS ${MCU_OPTIONS} -std=gnu11 -mthumb -Wall)
+set(CAOS_LINK_OPTIONS ${MCU_OPTIONS} -T${MCU_LINKER_SCRIPT}
+    -Wl,--gc-sections -static -nostdlib)
 
 set(ELF_DIR ${CMAKE_SOURCE_DIR}/elfs/${CURR_MCU})
 
@@ -67,23 +71,26 @@ function(caos_firmware NAME DIR)
     endif()
     set(_t ${MCU_LC}_${NAME})
     add_executable(${_t} ${_srcs})
-    target_compile_definitions(${_t} PRIVATE ${MCU_DEFINES} BUILD_VER="${CAOS_BUILD_VER}")
+    # CAOS_FREE=1: an example can size itself for the FREE heap cap (half)
+    target_compile_definitions(${_t} PRIVATE ${MCU_DEFINES} BUILD_VER="${CAOS_BUILD_VER}" LV_CONF_INCLUDE_SIMPLE CAOS_FREE=1)
     target_include_directories(${_t} PRIVATE ${DIR} ${CAOS_INCLUDES})
     target_compile_options(${_t} PRIVATE ${CAOS_C_OPTIONS})
     target_link_options(${_t} PRIVATE ${CAOS_LINK_OPTIONS} -Wl,-Map=${_t}.map)
-    target_link_libraries(${_t} -Wl,--start-group caOS_${CURR_MCU} caOS fatfs -lc -lm -Wl,--end-group)
+    target_link_libraries(${_t} -Wl,--start-group caOS_${CURR_MCU} caOS fatfs lvgl gcc -Wl,--end-group)
     set_target_properties(${_t} PROPERTIES SUFFIX ".elf"
                           RUNTIME_OUTPUT_DIRECTORY ${ELF_DIR})
     add_custom_command(TARGET ${_t} POST_BUILD COMMAND ${CMAKE_SIZE} $<TARGET_FILE:${_t}>)
 endfunction()
 
 # Examples: example_N, except those marked as not working with the FREE
-# libraries (fail_exNN_info.md says why).
+# libraries: fail_exNN_info.md on every board, fail_exNN_<MCU>_info.md on
+# that board only (each says why).
 file(GLOB _ex LIST_DIRECTORIES true ${CMAKE_SOURCE_DIR}/examples/example_*)
 foreach(_d IN LISTS _ex)
     get_filename_component(_n ${_d} NAME)
     string(REGEX MATCH "^example_([0-9]+)$" _m "${_n}")
-    if(_m AND NOT EXISTS ${_d}/fail_ex${CMAKE_MATCH_1}_info.md)
+    if(_m AND NOT EXISTS ${_d}/fail_ex${CMAKE_MATCH_1}_info.md
+          AND NOT EXISTS ${_d}/fail_ex${CMAKE_MATCH_1}_${CURR_MCU}_info.md)
         caos_firmware(example_${CMAKE_MATCH_1} ${_d})
     endif()
 endforeach()

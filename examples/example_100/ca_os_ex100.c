@@ -113,17 +113,20 @@ static void ic_test(void)
 }
 
 #if ENABLE_CLI
-static bool ex100_cli(c_str *pcmd)
+/* capture — the line arrives without the command word */
+static bool capture_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) { CLI_PUT_N("capture: test"); return false; }
-    if (ca_strncmp(p, "capture", 7) != 0) return false;
-    p = ca_skip_sp(p + 7);
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "test", 4) == 0) { ic_test(); return true; }
-    CLI_PUT_N("capture: test");
-    return true;
+    return false;                   /* cli prints the help line */
 }
-static ca_cli_node_t s_cli = { ex100_cli, NULL };
+static const ca_cli_cmd_t s_capture_cmds[] = {
+    { "capture", "capture   : test", { capture_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_capture_table = {
+    "capture", s_capture_cmds, (u16)(sizeof(s_capture_cmds) / sizeof(s_capture_cmds[0])), NULL
+};
 #endif
 
 void ca_os_configure(void)
@@ -137,7 +140,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_cli);
+        ca_cli_register_table(&s_capture_table);
     )
 }
 

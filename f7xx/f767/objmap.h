@@ -31,6 +31,8 @@
 #define MAX_TASK   25
 #define MAX_TIMER  32
 #define DUMP_BUFFER_SIZE    128
+/* Stack watermark alarm (idle scan), per mille of the task stack */
+#define STACK_WARN_PERMILLE 750U
 
 /* Number of network pool buffers (NET_BUF_SIZE = 2048 B each).
  * It lives HERE and nowhere else: see the note in caos/net/inc/net_buf.h.
@@ -54,13 +56,20 @@
  * guard region is programmed on it (32 B is the minimum MPU region granule, and
  * on ARMv7-M the guard depth is the largest power of 2 alloc_base is aligned to).
  * A value like 777 misaligns stack_end and silently weakens the guard. */
-#define STACK_MIN       1024
+#define STACK_MIN       1024      /* smallest remainder the stack arena splits off */
+/* STACK_SLICE: the step of the task stack sizes (21/11/2026, doc/stack_slice.md).
+ * Each size is a fixed value chosen for this board, not a ratio: any value of
+ * the form BASE + n * STACK_SLICE can be written, as long as it stays a multiple
+ * of 32 B (above) - and, on ARMv7-M, a multiple of 2 KB, which keeps the deep
+ * MPU guard at least 2 KB deep. Check: tools/stack_usage.py --tasks.
+ * 2/4/6/8/10 KB (was 2/4/8/16/16) */
+#define STACK_SLICE     2048U
 typedef enum {
-    STACK_SMALL  = (STACK_MIN*2),       /**< Simple tasks (minimum usable) */
-    STACK_MEDIUM = (STACK_SMALL*2),     /**< Normal tasks */
-    STACK_LARGE  = (STACK_MEDIUM*2),    /**< Complex tasks (printf, etc) */
-    STACK_XLARGE = (STACK_LARGE*2),     /**< Tasks with large buffers */
-    STACK_KERNEL = (STACK_LARGE*2)      /**< Main task / kernel */
+    STACK_SMALL  = (1U * STACK_SLICE),     /**< Simple tasks (minimum usable) */
+    STACK_MEDIUM = (2U * STACK_SLICE),     /**< Normal tasks */
+    STACK_LARGE  = (3U * STACK_SLICE),     /**< Complex tasks (printf, etc) */
+    STACK_XLARGE = (4U * STACK_SLICE),     /**< Tasks with large buffers */
+    STACK_KERNEL = (5U * STACK_SLICE)      /**< Main task / kernel */
 } ca_stack_size_t;
 
 /* Max depth of the MPU deep stack guard (ARMv7-M only: the ARMv8-M parts

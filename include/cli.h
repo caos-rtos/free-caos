@@ -58,16 +58,59 @@ sender ca_cli_get_sender(void);
  * ========================================================================== */
 
 
-typedef struct ca_cli_node {
-    bool (*handler)(c_str *cmd);  /* true = command handled */
-    struct ca_cli_node *next;
-} ca_cli_node_t;
+
+/* ============================================================================
+ * COMMAND TABLES (doc/cli_new.md, phase N0)
+ * ============================================================================
+ * One entry per command word. The function gets the line WITHOUT the command
+ * word (leading blanks skipped) and returns false on a usage error: the cli
+ * then prints the entry's help line.
+ * ========================================================================== */
+
+typedef bool (*ca_cli_fn_t)(c_str *args);
+
+typedef struct {
+    ca_cli_fn_t      fn;
+    ca_stack_size_t  stack;      /* 0 = runs inside cli (first stage: always) */
+} ca_cli_exec_t;
+
+typedef struct {
+    const char      *name;       /* the command word, compared EXACTLY */
+    const char      *help;       /* one line, "name      : syntax" */
+    ca_cli_exec_t    exec;
+} ca_cli_cmd_t;
+
+typedef struct ca_cli_table {    /* registration node, RAM */
+    const char          *name;   /* owner, for the hidden-name report */
+    const ca_cli_cmd_t  *cmds;   /* const table, flash */
+    u16                  n;
+    struct ca_cli_table *next;
+} ca_cli_table_t;
 
 /**
- * @brief Registers a node in the CLI chain (prepend)
- * @param[in] node Static node with handler and next=NULL
+ * @brief Appends a command table (searched after the built-ins and after
+ *        the tables registered before it; a duplicate name loses)
+ * @param[in] t Static node: name, cmds, n; next is set here
  */
-void ca_cli_register(ca_cli_node_t *node);
+void ca_cli_register_table(ca_cli_table_t *t);
+
+/**
+ * @brief Finds a command word in the tables, exact match
+ * @param[in] word First character of the word (not NUL-terminated)
+ * @param[in] len  Length of the word
+ * @return The entry's {fn, stack}, NULL if no table has the word
+ */
+const ca_cli_exec_t *ca_cli_find(const char *word, u16 len);
+
+/**
+ * @brief The next line goes to fn, whole, once (a prompt: password, menu choice)
+ * @details fn gets the line with leading and trailing blanks cut and runs
+ *          inside cli (quick, like a stack-0 entry). true: the line is
+ *          consumed; false: it goes on as a normal command. A prompt of
+ *          several steps arms the next one from fn. NULL disarms.
+ * @param[in] fn Line handler, or NULL
+ */
+void ca_cli_capture_next(ca_cli_fn_t fn);
 
 /**
  * @brief Initializes the CLI system
@@ -205,21 +248,14 @@ void ca_cli_data_from_isr(const u8  *data, u32 len);
  */
 void ca_cli_rx_byte(u32 ch);
 
-
-typedef u16 (*ca_cli_hook_t)(c_str cmd);
 /**
- * @brief sets a hook function on the cli for user-defined
- * commands in addition to system ones
- * 
+ * @brief Drops the line being edited and any half escape sequence.
+ *        Called when the console comes back from a task (console.c), so the
+ *        CLI restarts from an empty line.
  */
-void ca_cli_set_hook(ca_cli_hook_t hook);
+void ca_cli_line_reset(void);
 
-/**
- * @brief returns the hook function on the cli for user-defined
- * commands in addition to system ones
- * 
- */
-ca_cli_hook_t ca_cli_get_hook(void);
+
 
 /**
  * @brief Executes a CLI command and captures the output in a buffer.
@@ -273,7 +309,9 @@ bool ca_cli_exec_capture_stream(const char *cmd, sender out_sender,
 #define ca_cli_data_from_isr(...)
 #define ca_cli_rx_byte(...)
 #define ca_cli_ste_hook(...)
-#define ca_cli_register(...)
+#define ca_cli_register_table(...)
+#define ca_cli_capture_next(...)
+#define ca_cli_find(...)            ((const ca_cli_exec_t *)0)
 #define ca_cli_exec_capture(cmd, buf, size, ms)  (false)
 
 #endif

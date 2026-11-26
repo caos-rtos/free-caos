@@ -28,6 +28,74 @@ The package is made to be used together with an AI coding assistant. It ships:
 The assistant gets the real API and a way to check its work; the board still has the last
 word.
 
+## What caOS gives you
+
+The FREE edition carries the same drivers, network stack, graphics and crypto as the full
+edition. It differs in two things only: one fixed configuration and half the heap. CAN,
+USB High-Speed and MicroPython are left off by that configuration (why in **LIMITS.md**).
+
+### Kernel
+
+Weighted proportional scheduler (virtual time, 7 levels), mutex with priority
+inheritance, recursive mutex, semaphores, condition variables, RW locks, barriers,
+spinlocks; queues, event groups, task notifications, stream and message buffers; heap
+with per-task tracking, block pools, thread pools, software timers; MPU protection of
+stacks and heap; per-task fault policy (SafeGuard); CLI, asynchronous stdout, DWT
+cycle measurement.
+
+### Drivers
+
+Availability depends on the part: the manual (volume 1, "Hardware drivers") has the table
+per family.
+
+| Area | Drivers |
+|---|---|
+| Basic I/O | GPIO, EXTI, LED, UART (IRQ and DMA), LPUART |
+| Buses | SPI (master/slave, DMA), I2C (master/slave, bus recovery), QSPI / OCTOSPI / XSPI (indirect and memory-mapped; NOR, RAM, raw), SDIO (4-bit SD/SDHC, DMA) |
+| Analog | ADC, DAC, COMP, OPAMP, internal temperature sensor (DTS with alarm on H5/H7S) |
+| Timing | TIMER (periodic, one-shot, PWM, input capture, encoder), LPTIM, RTC (calendar, alarms, LSE probed, LSI calibrated), watchdogs IWDG/WWDG with reset cause |
+| System | clock, power modes and wake-up, flash (erase/write also by IRQ), backup registers and BKPSRAM, tamper, DMA / BDMA / GPDMA (circular, memory-to-memory) |
+| Math | CORDIC, FMAC (FIR/IIR), CRC32 |
+| Audio | SAI as full-duplex I2S (16/24/32 bit, DMA), SPDIFRX |
+| Image | DMA2D, hardware JPEG codec |
+| Connectivity | Ethernet RMII (checksum offload), USB device Full-Speed on every board: CDC, MSC, NCM, DFU, vendor, composite |
+| Storage | FatFs service on the SD card (files, folders, optional encryption) |
+
+### Network stack
+
+Written for caOS, over Ethernet and over USB-NCM: ARP, IPv4 with routing, ICMP, UDP,
+TCP (client and server, retransmission, handles with generation), IP reassembly and
+outbound fragmentation (MTU and path MTU); services DHCP, DNS, mDNS, NTP, syslog, TFTP
+(client and server, firmware update), HTTP server, **HTTPS with TLS 1.3**, MQTT, Modbus
+TCP, SSH server, VNC server (plain or over TLS 1.3), an iperf-style throughput service and
+a packet tracer.
+
+### Graphics
+
+Framebuffer (`fb`: L8 + palette or RGB565), DMA2D drawing unit, the VNC server to show
+it on the network, and **LVGL v9.6** (MIT) with fills and bitmaps on the DMA2D where the
+part has one.
+
+### Crypto
+
+Hardware AES, HASH, RNG and CRC where the part has them, software otherwise. AES
+ECB/CBC/CTR/GCM, SHA-1/256/512, HMAC, HKDF, PBKDF2, X25519, Ed25519, ECDSA P-256
+(RFC 6979), ChaCha20, Poly1305, ChaCha20-Poly1305 and XChaCha20-Poly1305, BLAKE2s and
+HMAC-BLAKE2s, all with the context kept by the caller (safe across tasks).
+
+### Cybersecurity
+
+- MPU-protected **key store** (keys usable without being readable), keystore service with
+  password-derived keys and automatic key ratchet, encrypted task-to-task channel
+  (AES-256-GCM, mandatory wipe).
+- **Signed firmware update**: bootloader with two slots, Ed25519-signed images, push over
+  TFTP and rollback.
+- **Secure services**: SSH (curve25519, Ed25519, AES), HTTPS and VNC over TLS 1.3, with
+  one session at a time by design.
+- **Tamper** erase of the backup-domain secrets on an intrusion event.
+- **Kernel hardening**: MPU stack guards, per-task fault policy, generation-checked handles
+  (no stale task or TCP handle reuse), and a network stack fuzzed on the PC (22 targets).
+
 ## What's in the box
 
 ```
@@ -45,7 +113,8 @@ free_caos/
   tools/lookup_sym.py tools/lookup_qa.py tools/db/   API reference and Q&A, searchable offline
   test/ eol.sh    the test bench, and the end-of-line run over every board
   simu/           run the same .elf on a simulated NUCLEO with Renode (no board needed)
-  doc/            the caOS manual (PDF, English and Italian) and the caOS overview (PDF)
+  doc/            the caOS manual in five volumes (PDF: features, examples, quick start
+                  in English and Italian; reference and Q&A in English) and the overview
   CLAUDE.md       guidance for an AI coding assistant working on this package
   README.md QUICKSTART.md LIMITS.md EXAMPLES.md EULA.md LICENSE CHANGELOG.md VERSION
 ```
@@ -104,8 +173,9 @@ issues in this release".
 
 ## Before you rely on it
 
-- The FREE edition carries **limits**, listed in **LIMITS.md** (missing peripherals, a
-  capped heap, and an integrity/anti-debug behaviour). Read it.
+- The FREE edition carries **limits**, listed in **LIMITS.md** (a fixed configuration
+  without CAN, USB HS and MicroPython, half the heap, and an integrity/anti-debug behaviour).
+  Read it.
 - Use of these binaries is governed by **EULA.md**.
 - The configuration (`include/os_config.h`) is **fixed**: it is the one the libraries were
   built with. Editing it does not change the precompiled libraries.

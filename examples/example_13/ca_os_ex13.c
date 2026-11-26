@@ -6,18 +6,19 @@
 /**
  ******************************************************************************
  * @file    ca_os_ex13.c
- * @brief   Example 13 — Execution time profiling with DWT CYCCNT
+ * @brief   Example 13 — Execution time profiling and per-task watchdog
  *
  * Demonstrates the use of the measure module (caos/src/measure.c) to measure
  * the execution time of a function from within a caOS task.
  *
- * The measure module uses the ARM core DWT->CYCCNT counter:
+ * The measure module reads the task's runtime_total (DWT->CYCCNT cycles the
+ * scheduler charges to the running task only):
  *   - no HW timer occupied
- *   - 1 clock cycle resolution
- *   - ca_measure_get_value() returns microseconds
+ *   - 1 clock cycle resolution, preemption and IRQs excluded
+ *   - the result is in clock cycles (the CLI converts it to ms)
  *
- * Sequence: ca_measure_init() → ca_measure_start() → <code>
- *           → ca_measure_stop() → ca_measure_get_value()
+ * Sequence: ca_measure_start(&snap) → <code> → ca_measure_stop(&snap)
+ *           (snap now holds the cycles spent in between)
  ******************************************************************************
  */
 
@@ -87,25 +88,26 @@ static u32 task_loop_fail(void *arg)
 }
 
 /* ------------------------------------------------------------------ */
-/* CLI hook                                                            */
+/* CLI commands                                                         */
 /* ------------------------------------------------------------------ */
 
-static bool user_cli_handler(c_str *pcmd)
+/* one entry per command word; each gets the line without its word */
+static bool show_cmd(c_str *args)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("show : elapsed time by example_13");
-        return false;
-    }
-    if (ca_strncmp(p, "show", 4) == 0) {
-        u32 time_ms=(u32)((g_elapsed_us*1000)/ca_os_clock_get_freq());
-        CLI_PRINTF_N("run count : %u", g_run_count);
-        CLI_PRINTF_N("last us   : %u clocks %u ms", (u32)g_elapsed_us,time_ms);
-        return true;
-    }
-    return false;
+    (void)args;
+    u32 time_ms=(u32)((g_elapsed_us*1000)/ca_os_clock_get_freq());
+    CLI_PRINTF_N("run count : %u", g_run_count);
+    CLI_PRINTF_N("last us   : %u clocks %u ms", (u32)g_elapsed_us,time_ms);
+    return true;
 }
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
+
+static const ca_cli_cmd_t s_user_cmds[] = {
+    { "show", "show      : elapsed time by example_13", { show_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_user_table = {
+    "user", s_user_cmds, (u16)(sizeof(s_user_cmds) / sizeof(s_user_cmds[0])), NULL
+};
 
 
 /* ------------------------------------------------------------------ */
@@ -149,7 +151,7 @@ void ca_os_main(void)
                             STACK_SMALL, CA_JOB_STD, CA_FAULT_ASSERT);
 
 
-        EVAL_CLI( ca_cli_register(&s_user_cli_node); )
+        EVAL_CLI( ca_cli_register_table(&s_user_table); )
     )
     ca_os_run(true);
 }

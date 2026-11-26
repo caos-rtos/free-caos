@@ -548,16 +548,9 @@ static void cmd_info(void) {
     CLI_PRINTF_N("  clock : %u Hz", SystemCoreClock);
 }
 
-static bool user_cli_handler(c_str *pcmd) {
-    const char *p = ca_skip_sp((*pcmd)->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("e88       : run [test|all] [sec] | info");
-        return false;
-    }
-    if (ca_strncmp(p, "e88", 3) != 0) return false;
-    p = ca_skip_sp(p + 3);
-
+/* e88 — the line arrives without the command word */
+static bool e88_cmd(c_str *args) {
+    const char *p = (*args)->data;
     if (s_busy) {
         CLI_PUT_N("e88: a run is in progress - wait for its RUN RESULT");
         return true;
@@ -572,10 +565,15 @@ static bool user_cli_handler(c_str *pcmd) {
         cmd_info();
         return true;
     }
-    CLI_PUT_N("e88       : run [test|all] [sec] | info");
-    return true;
+    return false;                   /* cli prints the help line */
 }
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
+static const ca_cli_cmd_t s_e88_cmds[] = {
+    { "e88", "e88       : run [test|all] [sec] | info", { e88_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_e88_table = {
+    "e88", s_e88_cmds, (u16)(sizeof(s_e88_cmds) / sizeof(s_e88_cmds[0])), NULL
+};
 
 /* ============================================================================
  * Entry points
@@ -607,7 +605,7 @@ void ca_os_main(void) {
     ca_timer_init();
     ca_os_job("example_88", CA_TH_LEVEL3, task_main, NULL, STACK_SMALL, CA_JOB_STD,
               CA_FAULT_RESTART_THREAD);
-    ca_cli_register(&s_user_cli_node);
+    ca_cli_register_table(&s_e88_table);
     ca_os_run(true);
 }
 

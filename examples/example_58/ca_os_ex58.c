@@ -22,10 +22,10 @@
  *   fat touch <file> | rm <file> | cat <file>
  *
  * This example adds the test tools, which are not a service:
- *   fat blob <file> <n> <B|K|M>  — write n bytes/KB/MB (cyclic 0x00..0xFF)
- *   fat sdtest <lba> [<n>]       — raw driver write→read→verify test (DESTRUCTIVE)
- *   fat test_all                 — full unattended sequence (DESTRUCTIVE)
- *   fat log                      — logger counters
+ *   e58 blob <file> <n> <B|K|M>  — write n bytes/KB/MB (cyclic 0x00..0xFF)
+ *   e58 sdtest <lba> [<n>]       — raw driver write→read→verify test (DESTRUCTIVE)
+ *   e58 test_all                 — full unattended sequence (DESTRUCTIVE)
+ *   e58 log                      — logger counters
  *
  * Logging: on every mount the example mirrors stdout lines to
  * <uptime>_cmd_log.log on the card, via ca_stdout_set_repeater(); it closes
@@ -84,7 +84,7 @@ static ex58_ctx_t *g_ctx = &s_ctx;
  * DRAIN THREAD, while the fat commands run in the CLI THREAD - two different
  * tasks - and caOS builds FatFS with FF_FS_REENTRANT=0 (caos_ffconf.h): no
  * internal locking whatsoever. Two threads inside FatFS at the same time
- * corrupts the volume, and it would happen on the very first "fat blob"
+ * corrupts the volume, and it would happen on the very first "e58 blob"
  * (44 s inside f_write) if anything printed meanwhile.
  *
  * Hence two guards, and they cover different things:
@@ -562,28 +562,26 @@ static const char *next_tok(const char *p, char *out, u32 maxlen)
     return p;
 }
 
-static bool ex58_cli_handler(c_str *pcmd)
+/* inject <Pn> <delay_ms> <hold_ms> */
+static bool inject_cmd(c_str *args_in)
 {
-    const char *p = ca_skip_sp((*pcmd)->data);
+    const char *p = (*args_in)->data;
+    char hold[12];
+    const char *args = next_tok(p, g_ctx->a1, sizeof(g_ctx->a1));
+    args = next_tok(args, g_ctx->a2, sizeof(g_ctx->a2));
+    next_tok(args, hold, sizeof(hold));
+    cmd_inject(g_ctx->a1, g_ctx->a2, hold);
+    return true;
+}
 
-    if (ca_strncmp(p, "help", 4) == 0) {
-        ca_stdout_put_n("fat       : blob <f> <n> <B|K|M> | sdtest <lba> [<n>] (raw, destructive)");
-        ca_stdout_put_n("            test_all (DESTRUCTIVE) | log - stdout to <uptime>_cmd_log.log");
-        ca_stdout_put_n("inject    : <Pn> <delay_ms> <hold_ms> - pin to input mid-transfer (C12 = SDIO CK)");
-        return false;
-    }
-
-    if (ca_strncmp(p, "inject", 6) == 0 && (p[6] == '\0' || p[6] == ' ')) {
-        char hold[12];
-        const char *args = next_tok(ca_skip_sp(p + 6), g_ctx->a1, sizeof(g_ctx->a1));
-        args = next_tok(args, g_ctx->a2, sizeof(g_ctx->a2));
-        next_tok(args, hold, sizeof(hold));
-        cmd_inject(g_ctx->a1, g_ctx->a2, hold);
-        return true;
-    }
-
-    if (ca_strncmp(p, "fat", 3) != 0 || (p[3] != '\0' && p[3] != ' ')) return false;
-    const char *args = next_tok(ca_skip_sp(p + 3), g_ctx->sub, sizeof(g_ctx->sub));
+/* e58 test_all|sdtest|blob|log - the example's own SD commands. They used to
+ * extend 'fat' (unknown words fell through to the service's node); with
+ * command tables two 'fat' entries cannot both be found, so they have a word
+ * of their own. */
+static bool e58_cmd(c_str *args_in)
+{
+    const char *p = (*args_in)->data;
+    const char *args = next_tok(p, g_ctx->sub, sizeof(g_ctx->sub));
     const char *sub = g_ctx->sub;
     char *a1 = g_ctx->a1, *a2 = g_ctx->a2, *a3 = g_ctx->a3;
 
@@ -592,7 +590,7 @@ static bool ex58_cli_handler(c_str *pcmd)
     if (ca_strcmp(sub, "sdtest") == 0) {
         args = next_tok(args, a1, sizeof(g_ctx->a1));
         next_tok(args, a2, sizeof(g_ctx->a2));
-        if (!a1[0]) ca_stdout_put_n("[fat] sdtest: sdtest <lba> [<n>] (DESTRUCTIVE)");
+        if (!a1[0]) ca_stdout_put_n("[e58] sdtest <lba> [<n>] (DESTRUCTIVE)");
         else        cmd_sdtest(a1, a2);
         return true;
     }
@@ -601,7 +599,7 @@ static bool ex58_cli_handler(c_str *pcmd)
         args = next_tok(args, a1, sizeof(g_ctx->a1));
         args = next_tok(args, a2, sizeof(g_ctx->a2));
         next_tok(args, a3, sizeof(g_ctx->a3));
-        if (!a1[0] || !a2[0]) ca_stdout_put_n("[fat] blob: blob <file> <n> <B|K|M>");
+        if (!a1[0] || !a2[0]) ca_stdout_put_n("[e58] blob <file> <n> <B|K|M>");
         else                  cmd_blob(a1, a2, a3[0] ? a3 : "B");
         return true;
     }
@@ -618,10 +616,17 @@ static bool ex58_cli_handler(c_str *pcmd)
         return true;
     }
 
-    return false;   /* a service command: let the next node have it */
+    return false;                   /* cli prints the help line */
 }
 
-static ca_cli_node_t s_ex58_cli_node = { ex58_cli_handler, NULL };
+static const ca_cli_cmd_t s_ex58_cmds[] = {
+    { "e58",    "e58       : blob <f> <n> <B|K|M> | sdtest <lba> [<n>] (raw, destructive) | test_all (DESTRUCTIVE) | log", { e58_cmd, STACK_MEDIUM } },
+    { "inject", "inject    : <Pn> <delay_ms> <hold_ms> pin to input mid-transfer (C12 = SDIO CK)", { inject_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_ex58_table = {
+    "ex58", s_ex58_cmds, (u16)(sizeof(s_ex58_cmds) / sizeof(s_ex58_cmds[0])), NULL
+};
 
 /* ============================================================================
  * Heartbeat task
@@ -670,7 +675,7 @@ void ca_os_configure(void)
     ca_fat_service_init();
     ca_fat_service_set_event_cb(fat_event);
     EVAL_CLI(
-        ca_cli_register(&s_ex58_cli_node);
+        ca_cli_register_table(&s_ex58_table);
         ca_cli_create_thread();
     )
     EVAL_USB_CDC_STD(ca_usb_dev_mng_cdc_cli();)

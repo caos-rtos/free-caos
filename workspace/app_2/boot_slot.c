@@ -41,7 +41,8 @@ const char *boot_slot_check(char slot, boot_hdr_t *hdr)
     /* Identity: the signature covers header bytes 0..87, hash included, so the
      * image too; the flag sits in the hashed bytes and cannot be dropped */
     if (hdr->flags & BOOT_HDR_SIGNED) {
-        if (!ca_ed25519_verify(hdr->signature, (const u8 *)base,
+        static ca_ed25519_ctx_t s_ed;       /* the bootloader may run before the heap */
+        if (!ca_ed25519_verify(&s_ed, hdr->signature, (const u8 *)base,
                                (u32)__builtin_offsetof(boot_hdr_t, signature), s_boot_pubkey))
             return "signature NOT valid for key " BOOT_PUBKEY_ID;
     } else if (BOOT_REQUIRE_SIGNED) {
@@ -54,7 +55,8 @@ static u32 conf_check(const boot_conf_t *c)
 {
     u8 digest[32];
     u32 v;
-    ca_sha256((const u8 *)c, (u32)__builtin_offsetof(boot_conf_t, check), digest);
+    static ca_sha256_ctx_t s_ctx;           /* the bootloader may run before the heap */
+    ca_sha256(&s_ctx, (const u8 *)c, (u32)__builtin_offsetof(boot_conf_t, check), digest);
     ca_memcpy(&v, digest, 4U);
     return v;
 }

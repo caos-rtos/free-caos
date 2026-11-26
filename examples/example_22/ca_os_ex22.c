@@ -355,153 +355,172 @@ static void cmd_stuck(void) {
  * CLI
  * ========================================================================== */
 
-static bool user_cli_handler(c_str *pcmd)
-{
-    const char *p = ca_skip_sp((*pcmd)->data);
+/* one entry per command word; each gets the line without its word */
 #ifdef EX22_WIRE
-    if (ca_strncmp(p, "wire", 4) == 0) {
-        /* Continuity test, no I2C involved: drive each master pin as a plain
-         * push-pull output and read the slave pin it should be wired to.
-         * This separates "the jumper is not carrying the signal" from every
-         * possible peripheral misconfiguration. */
-        static const struct { ca_gpio_port_t mp; ca_gpio_pin_t mpin;
-                              ca_gpio_port_t sp; ca_gpio_pin_t spin; const char *name; }
-        L[] = {
+static bool wire_cmd(c_str *args)
+{
+    (void)args;
+    /* Continuity test, no I2C involved: drive each master pin as a plain
+     * push-pull output and read the slave pin it should be wired to.
+     * This separates "the jumper is not carrying the signal" from every
+     * possible peripheral misconfiguration. */
+    static const struct { ca_gpio_port_t mp; ca_gpio_pin_t mpin;
+                          ca_gpio_port_t sp; ca_gpio_pin_t spin; const char *name; }
+    L[] = {
 /* The label carries the CONNECTOR pins, not just the port pins: this line is
  * read with a jumper wire in hand, and PB8 says nothing about where to plug
  * it. Numbers from UM2407 (H753), UM2861 (U575) and UM3115 (H563). */
 #if MCU_ID == 575
-            { CA_GPIO_PORT_F, CA_GPIO_PIN_14, CA_GPIO_PORT_F, CA_GPIO_PIN_1,
-              "SCL PF14 CN10-8  -> PF1 CN9-19" },
-            { CA_GPIO_PORT_F, CA_GPIO_PIN_15, CA_GPIO_PORT_F, CA_GPIO_PIN_0,
-              "SDA PF15 CN10-12 -> PF0 CN9-21" },
+        { CA_GPIO_PORT_F, CA_GPIO_PIN_14, CA_GPIO_PORT_F, CA_GPIO_PIN_1,
+          "SCL PF14 CN10-8  -> PF1 CN9-19" },
+        { CA_GPIO_PORT_F, CA_GPIO_PIN_15, CA_GPIO_PORT_F, CA_GPIO_PIN_0,
+          "SDA PF15 CN10-12 -> PF0 CN9-21" },
 #elif MCU_ID == 563 || MCU_ID == 773
-            /* H563 and H7S3: I2C1 PB8/PB9 (CN7) -> I2C2 PF1/PF0 (CN9), per
-               UM3115 and UM3276. */
-            { CA_GPIO_PORT_B, CA_GPIO_PIN_8, CA_GPIO_PORT_F, CA_GPIO_PIN_1,
-              "SCL PB8 CN7-2 -> PF1 CN9-19" },
-            { CA_GPIO_PORT_B, CA_GPIO_PIN_9, CA_GPIO_PORT_F, CA_GPIO_PIN_0,
-              "SDA PB9 CN7-4 -> PF0 CN9-21" },
+        /* H563 and H7S3: I2C1 PB8/PB9 (CN7) -> I2C2 PF1/PF0 (CN9), per
+           UM3115 and UM3276. */
+        { CA_GPIO_PORT_B, CA_GPIO_PIN_8, CA_GPIO_PORT_F, CA_GPIO_PIN_1,
+          "SCL PB8 CN7-2 -> PF1 CN9-19" },
+        { CA_GPIO_PORT_B, CA_GPIO_PIN_9, CA_GPIO_PORT_F, CA_GPIO_PIN_0,
+          "SDA PB9 CN7-4 -> PF0 CN9-21" },
 #elif MCU_ID == 439 || MCU_ID == 446 || MCU_ID == 767
-            /* F446 and F767: same layout as the H563, per UM1974 Table 18 -
-               both are MB1137 boards. */
-            { CA_GPIO_PORT_B, CA_GPIO_PIN_8, CA_GPIO_PORT_F, CA_GPIO_PIN_1,
-              "SCL PB8 CN7-2 -> PF1 CN9-19" },
-            { CA_GPIO_PORT_B, CA_GPIO_PIN_9, CA_GPIO_PORT_F, CA_GPIO_PIN_0,
-              "SDA PB9 CN7-4 -> PF0 CN9-21" },
+        /* F446 and F767: same layout as the H563, per UM1974 Table 18 -
+           both are MB1137 boards. */
+        { CA_GPIO_PORT_B, CA_GPIO_PIN_8, CA_GPIO_PORT_F, CA_GPIO_PIN_1,
+          "SCL PB8 CN7-2 -> PF1 CN9-19" },
+        { CA_GPIO_PORT_B, CA_GPIO_PIN_9, CA_GPIO_PORT_F, CA_GPIO_PIN_0,
+          "SDA PB9 CN7-4 -> PF0 CN9-21" },
 #else   /* H753: I2C1 PB8/PB9 -> I2C2 PB10/PB11 */
-            { CA_GPIO_PORT_B, CA_GPIO_PIN_8, CA_GPIO_PORT_B, CA_GPIO_PIN_10,
-              "SCL PB8 CN7-2 -> PB10 CN10-32" },
-            { CA_GPIO_PORT_B, CA_GPIO_PIN_9, CA_GPIO_PORT_B, CA_GPIO_PIN_11,
-              "SDA PB9 CN7-4 -> PB11 CN10-34" },
+        { CA_GPIO_PORT_B, CA_GPIO_PIN_8, CA_GPIO_PORT_B, CA_GPIO_PIN_10,
+          "SCL PB8 CN7-2 -> PB10 CN10-32" },
+        { CA_GPIO_PORT_B, CA_GPIO_PIN_9, CA_GPIO_PORT_B, CA_GPIO_PIN_11,
+          "SDA PB9 CN7-4 -> PB11 CN10-34" },
 #endif
-        };
-        u32 good = 0U;
-        for (u32 i = 0; i < 2; i++) {
-            ca_gpio_configure(L[i].mp, L[i].mpin, CA_GPIO_MODE_OUTPUT, CA_GPIO_OTYPE_PP,
-                              CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
-            ca_gpio_configure(L[i].sp, L[i].spin, CA_GPIO_MODE_INPUT, CA_GPIO_OTYPE_PP,
-                              CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
-            ca_gpio_write(L[i].mp, L[i].mpin, 0);
-            for (volatile u32 d = 0; d < 20000; d++) { }
-            u8 lo = ca_gpio_read(L[i].sp, L[i].spin);
-            ca_gpio_write(L[i].mp, L[i].mpin, 1);
-            for (volatile u32 d = 0; d < 20000; d++) { }
-            u8 hi = ca_gpio_read(L[i].sp, L[i].spin);
-            CLI_PRINTF_N("  %s : drive0->read%u  drive1->read%u  %s",
-                         L[i].name, lo, hi,
-                         (lo == 0 && hi == 1) ? "OK (wire present)"
-                                              : "FAIL (wire missing or swapped)");
-            if (lo == 0 && hi == 1) good++;
-        }
-        /* One line the bench can read, identical in every example that has a
-         * `wire` command - see the note in ex64. */
-        CLI_PRINTF_N("  WIRE RESULT : %s  (%u/2)",
-                     (good == 2U) ? "OK" : "FAIL", good);
-        /* Release the pins: leaving them as push-pull outputs driving high
-         * would keep an open-drain bus locked for whoever runs next. */
-        for (u32 i = 0; i < 2; i++) {
-            ca_gpio_configure(L[i].mp, L[i].mpin, CA_GPIO_MODE_INPUT, CA_GPIO_OTYPE_OD,
-                              CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
-            ca_gpio_configure(L[i].sp, L[i].spin, CA_GPIO_MODE_INPUT, CA_GPIO_OTYPE_OD,
-                              CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
-        }
-        /* The pins are plain GPIO now, not I2C: reboot rather than asking for
-         * the button. The delay leaves the result on screen. */
-        CLI_PUT_N("  rebooting in 2.5 s to restore I2C...");
-        ca_os_sleep(2500);
-        ca_os_reset();
-        return true;
+    };
+    u32 good = 0U;
+    for (u32 i = 0; i < 2; i++) {
+        ca_gpio_configure(L[i].mp, L[i].mpin, CA_GPIO_MODE_OUTPUT, CA_GPIO_OTYPE_PP,
+                          CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
+        ca_gpio_configure(L[i].sp, L[i].spin, CA_GPIO_MODE_INPUT, CA_GPIO_OTYPE_PP,
+                          CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
+        ca_gpio_write(L[i].mp, L[i].mpin, 0);
+        for (volatile u32 d = 0; d < 20000; d++) { }
+        u8 lo = ca_gpio_read(L[i].sp, L[i].spin);
+        ca_gpio_write(L[i].mp, L[i].mpin, 1);
+        for (volatile u32 d = 0; d < 20000; d++) { }
+        u8 hi = ca_gpio_read(L[i].sp, L[i].spin);
+        CLI_PRINTF_N("  %s : drive0->read%u  drive1->read%u  %s",
+                     L[i].name, lo, hi,
+                     (lo == 0 && hi == 1) ? "OK (wire present)"
+                                          : "FAIL (wire missing or swapped)");
+        if (lo == 0 && hi == 1) good++;
     }
-#endif
-    if (ca_strncmp(p, "help", 4) == 0) {
-        /* "led" is not listed here: ca_led_init() registers the LED node,
-         * which prints its own help line. */
-        CLI_PUT_N("ping | echo | show | wire | stuck");
-        return false;
+    /* One line the bench can read, identical in every example that has a
+     * `wire` command - see the note in ex64. */
+    CLI_PRINTF_N("  WIRE RESULT : %s  (%u/2)",
+                 (good == 2U) ? "OK" : "FAIL", good);
+    /* Release the pins: leaving them as push-pull outputs driving high
+     * would keep an open-drain bus locked for whoever runs next. */
+    for (u32 i = 0; i < 2; i++) {
+        ca_gpio_configure(L[i].mp, L[i].mpin, CA_GPIO_MODE_INPUT, CA_GPIO_OTYPE_OD,
+                          CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
+        ca_gpio_configure(L[i].sp, L[i].spin, CA_GPIO_MODE_INPUT, CA_GPIO_OTYPE_OD,
+                          CA_GPIO_SPEED_LOW, CA_GPIO_NOPULL, 0);
     }
-#ifdef EX22_WIRE
-    if (ca_strncmp(p, "stuck", 5) == 0) {
-        cmd_stuck();
-        return true;
-    }
-#endif
-    if (ca_strncmp(p, "ping", 4) == 0) {
-        u8 tx[PKT_SIZE] = { CMD_PING, 0xAAu, 0x55u, 0u };
-        u8 rx[PKT_SIZE] = { 0 };
-        ca_i2c_write_read(I2C_MASTER, SLAVE_ADDR, tx, PKT_SIZE, rx, PKT_SIZE);
-        bool ok = (rx[0] == (CMD_PING | RESP_FLAG));
-        CLI_PRINTF_N("ping: %02X %02X %02X %02X  %s",
-                     (u32)rx[0], (u32)rx[1], (u32)rx[2], (u32)rx[3], ok ? "OK" : "ERR");
-        return true;
-    }
-    if (ca_strncmp(p, "echo", 4) == 0) {
-        u8 tx[PKT_SIZE] = { CMD_ECHO, 0x12u, 0x34u, 0u };
-        u8 rx[PKT_SIZE] = { 0 };
-        ca_i2c_write_read(I2C_MASTER, SLAVE_ADDR, tx, PKT_SIZE, rx, PKT_SIZE);
-        bool ok = (rx[0] == (CMD_ECHO | RESP_FLAG)) &&
-                  (rx[1] == (u8)(~tx[1]))            &&
-                  (rx[2] == (u8)(~tx[2]));
-        CLI_PRINTF_N("echo: %02X %02X %02X %02X  %s",
-                     (u32)rx[0], (u32)rx[1], (u32)rx[2], (u32)rx[3], ok ? "OK" : "ERR");
-        return true;
-    }
-    if (ca_strncmp(p, "show", 4) == 0) {
-        CLI_PUT_N("--- Example 22 I2C master/slave ---");
-        CLI_PUT_N("  master     : " MASTER_TXT);
-        CLI_PUT_N("  slave      : " SLAVE_TXT);
-        CLI_PUT_N("  wiring     : " WIRE_SCL);
-        CLI_PUT_N("               " WIRE_SDA);
-        CLI_PRINTF_N("  i2c init   : master=%s  slave=%s",
-                     g_master_up ? "OK" : "FAILED", g_slave_up ? "OK" : "FAILED");
-#ifdef EX22_DIAG
-        {   /* Why the last transfer failed — no scope needed. */
-            u32 stage = 0;
-            u32 isr   = ca_i2c_hw_last_error(&stage);
-            static const char *st[] = { "-", "TXIS", "TC", "RXNE", "BUSY-stuck" };
-            CLI_PRINTF_N("  last fail  : stage=%s  ISR=0x%08X",
-                         st[stage <= 4U ? stage : 0U], isr);
-            CLI_PRINTF_N("    BUSY=%u NACKF=%u BERR=%u ARLO=%u TXIS=%u RXNE=%u",
-                         (isr >> 15) & 1U, (isr >> 4) & 1U, (isr >> 8) & 1U,
-                         (isr >> 9) & 1U, (isr >> 1) & 1U, (isr >> 2) & 1U);
-            u32 oar1 = 0, cr1 = 0, sisr = 0;
-            u32 nirq = ca_i2c_hw_slave_probe(&oar1, &cr1, &sisr);
-            CLI_PRINTF_N("  slave regs : irq=%u OAR1=0x%08X CR1=0x%08X ISR=0x%08X",
-                         nirq, oar1, cr1, sisr);
-            CLI_PRINTF_N("    OA1EN=%u addr7=0x%02X  PE=%u ADDRIE=%u",
-                         (oar1 >> 15) & 1U, (oar1 >> 1) & 0x7FU,
-                         cr1 & 1U, (cr1 >> 3) & 1U);
-        }
-#endif
-        CLI_PRINTF_N("  master tx  : %u", g_master_tx_count);
-        CLI_PRINTF_N("  master rx  : %u", g_master_rx_count);
-        CLI_PRINTF_N("  errors     : %u", g_err_count);
-        CLI_PRINTF_N("  slave rx   : %u", g_slave_rx_count);
-        return true;
-    }
-    return false;
+    /* The pins are plain GPIO now, not I2C: reboot rather than asking for
+     * the button. The delay leaves the result on screen. */
+    CLI_PUT_N("  rebooting in 2.5 s to restore I2C...");
+    ca_os_sleep(2500);
+    ca_os_reset();
+    return true;
 }
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
+#endif
+
+#ifdef EX22_WIRE
+static bool stuck_cmd(c_str *args)
+{
+    (void)args;
+    cmd_stuck();
+    return true;
+}
+#endif
+
+static bool ping_cmd(c_str *args)
+{
+    (void)args;
+    u8 tx[PKT_SIZE] = { CMD_PING, 0xAAu, 0x55u, 0u };
+    u8 rx[PKT_SIZE] = { 0 };
+    ca_i2c_write_read(I2C_MASTER, SLAVE_ADDR, tx, PKT_SIZE, rx, PKT_SIZE);
+    bool ok = (rx[0] == (CMD_PING | RESP_FLAG));
+    CLI_PRINTF_N("ping: %02X %02X %02X %02X  %s",
+                 (u32)rx[0], (u32)rx[1], (u32)rx[2], (u32)rx[3], ok ? "OK" : "ERR");
+    return true;
+}
+
+static bool echo_cmd(c_str *args)
+{
+    (void)args;
+    u8 tx[PKT_SIZE] = { CMD_ECHO, 0x12u, 0x34u, 0u };
+    u8 rx[PKT_SIZE] = { 0 };
+    ca_i2c_write_read(I2C_MASTER, SLAVE_ADDR, tx, PKT_SIZE, rx, PKT_SIZE);
+    bool ok = (rx[0] == (CMD_ECHO | RESP_FLAG)) &&
+              (rx[1] == (u8)(~tx[1]))            &&
+              (rx[2] == (u8)(~tx[2]));
+    CLI_PRINTF_N("echo: %02X %02X %02X %02X  %s",
+                 (u32)rx[0], (u32)rx[1], (u32)rx[2], (u32)rx[3], ok ? "OK" : "ERR");
+    return true;
+}
+
+static bool show_cmd(c_str *args)
+{
+    (void)args;
+    CLI_PUT_N("--- Example 22 I2C master/slave ---");
+    CLI_PUT_N("  master     : " MASTER_TXT);
+    CLI_PUT_N("  slave      : " SLAVE_TXT);
+    CLI_PUT_N("  wiring     : " WIRE_SCL);
+    CLI_PUT_N("               " WIRE_SDA);
+    CLI_PRINTF_N("  i2c init   : master=%s  slave=%s",
+                 g_master_up ? "OK" : "FAILED", g_slave_up ? "OK" : "FAILED");
+#ifdef EX22_DIAG
+    {   /* Why the last transfer failed — no scope needed. */
+        u32 stage = 0;
+        u32 isr   = ca_i2c_hw_last_error(&stage);
+        static const char *st[] = { "-", "TXIS", "TC", "RXNE", "BUSY-stuck" };
+        CLI_PRINTF_N("  last fail  : stage=%s  ISR=0x%08X",
+                     st[stage <= 4U ? stage : 0U], isr);
+        CLI_PRINTF_N("    BUSY=%u NACKF=%u BERR=%u ARLO=%u TXIS=%u RXNE=%u",
+                     (isr >> 15) & 1U, (isr >> 4) & 1U, (isr >> 8) & 1U,
+                     (isr >> 9) & 1U, (isr >> 1) & 1U, (isr >> 2) & 1U);
+        u32 oar1 = 0, cr1 = 0, sisr = 0;
+        u32 nirq = ca_i2c_hw_slave_probe(&oar1, &cr1, &sisr);
+        CLI_PRINTF_N("  slave regs : irq=%u OAR1=0x%08X CR1=0x%08X ISR=0x%08X",
+                     nirq, oar1, cr1, sisr);
+        CLI_PRINTF_N("    OA1EN=%u addr7=0x%02X  PE=%u ADDRIE=%u",
+                     (oar1 >> 15) & 1U, (oar1 >> 1) & 0x7FU,
+                     cr1 & 1U, (cr1 >> 3) & 1U);
+    }
+#endif
+    CLI_PRINTF_N("  master tx  : %u", g_master_tx_count);
+    CLI_PRINTF_N("  master rx  : %u", g_master_rx_count);
+    CLI_PRINTF_N("  errors     : %u", g_err_count);
+    CLI_PRINTF_N("  slave rx   : %u", g_slave_rx_count);
+    return true;
+}
+
+static const ca_cli_cmd_t s_user_cmds[] = {
+#ifdef EX22_WIRE
+    { "wire", "wire      : continuity test of the SCL/SDA jumpers (reboots after)", { wire_cmd, STACK_MEDIUM } },
+#endif
+#ifdef EX22_WIRE
+    { "stuck", "stuck     : hold SDA low: bus recovery check", { stuck_cmd, STACK_MEDIUM } },
+#endif
+    { "ping", "ping      : PING the I2C slave", { ping_cmd, STACK_MEDIUM } },
+    { "echo", "echo      : ECHO round trip with the I2C slave", { echo_cmd, STACK_MEDIUM } },
+    { "show", "show      : wiring, init state, counters", { show_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_user_table = {
+    "user", s_user_cmds, (u16)(sizeof(s_user_cmds) / sizeof(s_user_cmds[0])), NULL
+};
 
 /* ============================================================================
  * ENTRY POINTS
@@ -539,7 +558,7 @@ void ca_os_main(void)
 {
     ca_os_job("master", CA_TH_LEVEL3, task_master, NULL, STACK_SMALL, CA_JOB_STD, CA_FAULT_RESTART_THREAD);
 
-    EVAL_CLI( ca_cli_register(&s_user_cli_node); )
+    EVAL_CLI( ca_cli_register_table(&s_user_table); )
 
     ca_os_run(true);
 }

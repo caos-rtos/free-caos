@@ -6,7 +6,8 @@
 /**
  ******************************************************************************
  * @file           : ca_os_ex66.c
- * @brief          : Example 66 — crypto self-test (SHA-512, X25519, Ed25519, P-256)
+ * @brief          : Example 66 — crypto self-test (SHA-512, X25519, Ed25519, P-256,
+ *                    ChaCha20-Poly1305, BLAKE2s)
  ******************************************************************************
  * @details
  * Validation of the cryptographic primitives that form the basis of the
@@ -19,6 +20,11 @@
  *   X25519    RFC 7748           8 tests   key exchange curve25519-sha256
  *   Ed25519   RFC 8032           8 tests   host key + user auth
  *   P-256     RFC 6979 A.2.5    10 tests   ECDSA for the TLS 1.3 server
+ *   ChaCha20  RFC 8439, XChaCha 13 tests   ChaCha20, Poly1305, both AEADs
+ *   BLAKE2s   RFC 7693, RFC 2104 10 tests  hash, keyed, HMAC-BLAKE2s
+ *
+ * ChaCha20-Poly1305, BLAKE2s, HMAC-BLAKE2s and X25519 are the primitives of
+ * WireGuard (Noise IK).
  *
  * At startup, the task executes the three batteries in sequence and prints the
  * overall result with the time taken. The following remain available from the console:
@@ -29,6 +35,8 @@
  *   ed25519 keygen     generates a key pair from the hardware RNG
  *   p256 test          re-runs the RFC 6979 vectors (prints sign/verify ms)
  *   p256 keygen        generates a P-256 key pair from the RNG
+ *   chacha test|speed  RFC 8439 / XChaCha vectors, AEAD throughput (1420 B)
+ *   blake2s test|speed RFC 7693 / HMAC vectors, hash throughput (1420 B)
  *
  * The verification is not a formality: an incorrect cryptographic primitive
  * still produces random-looking output, and the error would only emerge
@@ -112,6 +120,12 @@ static crypto_test_t s_tests[] = {
 #if EN_ECDSA_P256_TEST && EN_ECDSA_P256
     { "P-256",   ca_ecdsa_p256_selftest, STACK_KERNEL, T_PENDING, 0U, 0U, 0U },
 #endif
+#if EN_CHACHA20_POLY1305_TEST && EN_CHACHA20_POLY1305
+    { "ChaCha20", ca_chacha20poly1305_selftest, STACK_LARGE, T_PENDING, 0U, 0U, 0U },
+#endif
+#if EN_BLAKE2S_TEST && EN_BLAKE2S
+    { "BLAKE2s", ca_blake2s_selftest, STACK_LARGE,  T_PENDING, 0U, 0U, 0U },
+#endif
 };
 #define N_TESTS  (sizeof(s_tests) / sizeof(s_tests[0]))
 
@@ -163,7 +177,8 @@ static u32 task_selftest(void *arg)
     ca_os_sleep(2000);
      EVAL_STDOUT(ca_stdout_printf_n("\r\n=== Example 66: crypto self-test ===");)
      EVAL_STDOUT(ca_stdout_printf_n("SHA-512 (FIPS 180-4), X25519 (RFC 7748), Ed25519 (RFC 8032), P-256 (RFC 6979)");)
-     EVAL_STDOUT(ca_stdout_printf_n("SSH server stack base primitives");)
+     EVAL_STDOUT(ca_stdout_printf_n("ChaCha20-Poly1305 (RFC 8439, XChaCha), BLAKE2s (RFC 7693) + HMAC");)
+     EVAL_STDOUT(ca_stdout_printf_n("SSH server and WireGuard base primitives");)
      EVAL_STDOUT(ca_os_sleep(100);)
     
 
@@ -249,7 +264,7 @@ static u32 task_selftest(void *arg)
         EVAL_STDOUT( ca_stdout_printf_n("ex66: %u TESTS FAILED - do not proceed", fails); )
     }
 
-    EVAL_STDOUT( ca_stdout_put_n("ex66: 'sha512|x25519|ed25519|p256 test' to run again"); )
+    EVAL_STDOUT( ca_stdout_put_n("ex66: 'sha512|x25519|ed25519|p256|chacha|blake2s test' to run again"); )
     return fails + dead;
 }
 
@@ -288,6 +303,8 @@ void ca_os_main(void)
     EVAL_X25519_TEST(  ca_x25519_test_init();  )
     EVAL_ED25519_TEST( ca_ed25519_test_init(); )
     EVAL_ECDSA_P256_TEST( ca_ecdsa_p256_test_init(); )
+    EVAL_CHACHA20_POLY1305_TEST( ca_chacha20poly1305_test_init(); )
+    EVAL_BLAKE2S_TEST( ca_blake2s_test_init(); )
 
     /* The batteries are NOT created here any more: task_selftest creates each
      * one when its turn comes, so only one of them holds a stack at a time.

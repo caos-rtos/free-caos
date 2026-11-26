@@ -84,6 +84,11 @@ typedef struct ca_usb_class_ops_s {
        a complete USB string descriptor (bLength, bDescriptorType=0x03,
        UTF-16LE) into buf and returns the length; 0 if the index is not its own. */
     u16  (*get_string)  (const ca_usb_device_type_t *cfg, u8 idx, u8 *buf, u16 max);
+    /* DIRECT RX (optional, see ca_usb_rx_dest_cb_t in usb.h): where to put an
+       OUT packet of len bytes on ep_addr, or NULL (its EP or not: NULL lets the
+       queue path decide). rx_placed: the packet is there. ISR context. */
+    u8  *(*rx_dest)     (const ca_usb_device_type_t *cfg, u8 ep_addr, u16 len);
+    bool (*rx_placed)   (const ca_usb_device_type_t *cfg, u8 ep_addr, u16 len);
 } ca_usb_class_ops_t;
 
 struct ca_usb_device_type_s {

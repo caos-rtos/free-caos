@@ -301,27 +301,45 @@ static void cmd_stop(void) {
     if (left == 0U) s_mode = E2_IDLE;
 }
 
-#define E2_HELP() do { \
-    CLI_PUT_N("same      : <lvl 0..6> [load%|busy] workers all at one level (round robin)"); \
-    CLI_PUT_N("multi     : [load%|busy] workers over the 7 levels (CFS)"); \
-    CLI_PUT_N("get       : counters, CPU load, ratios"); \
-    CLI_PUT_N("stop      : end the workers"); \
-} while (0)
-
-static bool word(const char *p, const char *w, u32 n) {
-    return ca_strncmp(p, w, n) == 0 && (p[n] == '\0' || p[n] == ' ');
+/* one entry per command word; each gets the line without its word */
+static bool same_cmd(c_str *args)
+{
+    const char *p = (*args)->data;
+    cmd_same(p);
+    return true;
 }
 
-static bool user_cli_handler(c_str *pcmd) {
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) { E2_HELP(); return false; }
-    if (word(p, "same", 4))  { cmd_same(p + 4);  return true; }
-    if (word(p, "multi", 5)) { cmd_multi(p + 5); return true; }
-    if (word(p, "get", 3))   { cmd_get();        return true; }
-    if (word(p, "stop", 4))  { cmd_stop();       return true; }
-    return false;
+static bool multi_cmd(c_str *args)
+{
+    const char *p = (*args)->data;
+    cmd_multi(p);
+    return true;
 }
-static ca_cli_node_t s_user_cli_node = { user_cli_handler, NULL };
+
+static bool get_cmd(c_str *args)
+{
+    (void)args;
+    cmd_get();
+    return true;
+}
+
+static bool stop_cmd(c_str *args)
+{
+    (void)args;
+    cmd_stop();
+    return true;
+}
+
+static const ca_cli_cmd_t s_user_cmds[] = {
+    { "same", "same      : <lvl 0..6> [load%|busy] workers all at one level (round robin)", { same_cmd, STACK_MEDIUM } },
+    { "multi", "multi     : [load%|busy] workers over the 7 levels (CFS)", { multi_cmd, STACK_MEDIUM } },
+    { "get", "get       : counters, CPU load, ratios", { get_cmd, STACK_MEDIUM } },
+    { "stop", "stop      : end the workers", { stop_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_user_table = {
+    "user", s_user_cmds, (u16)(sizeof(s_user_cmds) / sizeof(s_user_cmds[0])), NULL
+};
 
 static u32 task_main(void *arg) {
     (void)arg;
@@ -348,7 +366,7 @@ void ca_os_main(void) {
     s_mode = E2_IDLE;
     ca_os_job("example_2", CA_TH_LEVEL3, task_main, NULL, STACK_SMALL, CA_JOB_STD,
               CA_FAULT_ASSERT);
-    ca_cli_register(&s_user_cli_node);
+    ca_cli_register_table(&s_user_table);
     ca_os_run(true);
 }
 

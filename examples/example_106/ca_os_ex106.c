@@ -319,18 +319,10 @@ static void ex106_bench(void)
 }
 
 #if ENABLE_CLI
-static void ex106_usage(void)
+/* jpeg — the line arrives without the command word */
+static bool jpeg_cmd(c_str *args)
 {
-    CLI_PUT_N("jpeg      : test <roundtrip|foreign|determ|errors> | all | dump | bench");
-}
-
-static bool ex106_cli(c_str *pcmd)
-{
-    const char *p = ca_skip_sp((*pcmd)->data);
-    if (ca_strncmp(p, "help", 4) == 0) { ex106_usage(); return false; }
-    if (ca_strncmp(p, "jpeg", 4) != 0) return false;
-    p = ca_skip_sp(p + 4);
-
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "all", 3) == 0)   { ex106_all(); return true; }
     if (ca_strncmp(p, "dump", 4) == 0)  { ex106_dump(); return true; }
     if (ca_strncmp(p, "bench", 5) == 0) { ex106_bench(); return true; }
@@ -341,10 +333,15 @@ static bool ex106_cli(c_str *pcmd)
             if (ca_strncmp(p, s_groups[i].name, n) == 0) { (void)run_group(&s_groups[i], true); return true; }
         }
     }
-    ex106_usage();
-    return true;
+    return false;                   /* cli prints the help line */
 }
-static ca_cli_node_t s_cli = { ex106_cli, NULL };
+static const ca_cli_cmd_t s_jpeg_cmds[] = {
+    { "jpeg", "jpeg      : test <roundtrip|foreign|determ|errors> | all | dump | bench", { jpeg_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_jpeg_table = {
+    "jpeg", s_jpeg_cmds, (u16)(sizeof(s_jpeg_cmds) / sizeof(s_jpeg_cmds[0])), NULL
+};
 #endif
 
 PRIVATE_STRING(why, "ex106: this part has no JPEG codec (F767 and H753 have it)");
@@ -368,7 +365,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_cli);
+        ca_cli_register_table(&s_jpeg_table);
     )
 }
 

@@ -73,7 +73,7 @@
 #define BOARD_IP_C   10U
 #define BOARD_IP_D   84U
 
-static const ca_mac_t s_mac = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x84U } };
+static const ca_mac_t s_mac = CA_EXAMPLE_MAC(84);
 static ca_ipv4_t      s_ip;
 
 /* Queue between the filter (runs in net task) and the echo task.
@@ -208,18 +208,10 @@ static u32 task_echo(void *arg)
  * CLI: 'echo' -- the counters this example exists to produce
  * ============================================================================ */
 #if ENABLE_CLI
-static bool echo_cli_handler(c_str *pcmd)
+/* echo — the line arrives without the command word */
+static bool echo_cmd(c_str *args)
 {
-    c_str cmd = *pcmd;
-    const char *p = ca_skip_sp(cmd->data);
-
-    if (ca_strncmp(p, "help", 4) == 0) {
-        CLI_PUT_N("echo      : stats | clear");
-        return false;
-    }
-    if (ca_strncmp(p, "echo", 4) != 0) return false;
-    p = ca_skip_sp(p + 4);
-
+    const char *p = (*args)->data;
     if (ca_strncmp(p, "stats", 5) == 0) {
         CLI_PRINTF_N("echo rx=%u tx=%u", (u32)s_rx, (u32)s_tx);
         CLI_PRINTF_N("drop q=%u tx=%u short=%u",
@@ -237,10 +229,15 @@ static bool echo_cli_handler(c_str *pcmd)
         return true;
     }
 
-    CLI_PUT_N("echo      : stats | clear");
-    return false;
+    return false;                   /* cli prints the help line */
 }
-static ca_cli_node_t s_echo_cli_node = { echo_cli_handler, NULL };
+static const ca_cli_cmd_t s_echo_cmds[] = {
+    { "echo", "echo      : stats | clear", { echo_cmd, STACK_MEDIUM } },
+};
+
+static ca_cli_table_t s_echo_table = {
+    "echo", s_echo_cmds, (u16)(sizeof(s_echo_cmds) / sizeof(s_echo_cmds[0])), NULL
+};
 #endif
 
 /* ============================================================================
@@ -248,13 +245,13 @@ static ca_cli_node_t s_echo_cli_node = { echo_cli_handler, NULL };
  * ============================================================================ */
 static const ca_net_cfg_t net_cfg = {
     .ip   = { .addr = 0U },           /* set from s_ip in task_net */
-    .mac  = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x84U } },
+    .mac  = CA_EXAMPLE_MAC(84),
     .udp  = { .bindings = { {0U, NULL} }, .count = 0U },
     .icmp = { .echo_reply = true },   /* so a ping can prove the board is up */
 };
 
 static ca_eth_cfg_t eth_cfg = {
-    .mac       = { .v = { 0x02U,0x00U,0x00U,0x00U,0x00U,0x84U } },
+    .mac       = CA_EXAMPLE_MAC(84),
     .phy_addr  = 0U,
     .rmii      = true,
     .rx_cb     = NULL,
@@ -355,7 +352,7 @@ void ca_os_configure(void)
         ca_cli_init(2048);
         ca_cli_set_sender(STDOUT);
         ca_cli_create_thread();
-        ca_cli_register(&s_echo_cli_node);
+        ca_cli_register_table(&s_echo_table);
     )
     EVAL_USB_CDC_STD(ca_usb_dev_mng_cdc_cli();)
 

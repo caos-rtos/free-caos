@@ -57,7 +57,7 @@
    and fast (for ramdisk: memcpy). */
 typedef struct {
     ca_usb_device_type_t header;        /* tag + ops (D19) — first field */
-    u16  mps;                            /* Bulk MPS (64 FS, 512 HS); 0 = 64 */
+    u16  mps;                            /* Bulk MPS (64 FS, 512 HS); 0 = per speed (ca_usb_bulk_mps) */
     u32  block_size;                     /* typically 512 */
     u32  block_count;                    /* total number of blocks (capacity) */
     bool (*read) (u32 lba, u8 *buf, u32 count);
