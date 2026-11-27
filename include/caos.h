@@ -50,7 +50,6 @@
 #include "utils.h"
 #include "cli.h"
 #include "console.h"
-#include "python.h"
 #include "callto.h"
 #include "sha256.h"
 #include "kdf.h"
@@ -96,6 +95,7 @@
 #include "sdio.h"
 #include "fat_service.h"
 #include "timer.h"
+#include "st7735.h"      /* after spi.h, timer.h, gpio_driver.h */
 #include "lptim.h"
 #include "lpuart.h"
 #include "rtc.h"
@@ -142,6 +142,7 @@
 #include "https_service.h"
 #include "pool.h"
 #include "block_pool.h"
+#include "python.h"       /* after st7735.h and fb.h: it takes their types */
 // hw glue interface (last: uses types from all driver headers above)
 #include "ca_glue_hw.h"
 #include "caos_info.h"

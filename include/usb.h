@@ -32,6 +32,25 @@
 
 #if EN_USB
 
+/* ── EP queue budget ─────────────────────────────────────────────────────────
+ * The drivers with software EP queues size their pools from the classes that
+ * are built (one instance per class, ca_usb_dev_mng_add), not from every data
+ * EP the hardware has. A ring is given to an EP at ca_usb_ep_open, in the
+ * direction of the EP; an EP opened beyond the budget gets no ring and the
+ * open fails. Each core (FS, HS) has its own pool sized for every class: the
+ * class-to-core split is only known at run time.
+ *   bulk pairs : CDC, MSC, NCM, plus the CUSTOM class or raw ca_usb_ep_* use
+ *                (USB_CUSTOM_EPS pairs, at least 1 with EN_USB_CUSTOM)
+ *   interrupt IN: CDC and NCM notifications
+ * The driver clamps both to its own number of queued EPs. */
+#ifndef USB_CUSTOM_EPS
+#define USB_CUSTOM_EPS 0U
+#endif
+#define USB_Q_CUSTOM_PAIRS  ((USB_CUSTOM_EPS) > (u32)(EN_USB_CUSTOM) ? (USB_CUSTOM_EPS) : (u32)(EN_USB_CUSTOM))
+#define USB_Q_BULK_PAIRS    ((u32)(EN_USB_CDC) + (u32)(EN_USB_MSC) + (u32)(EN_USB_NCM) + USB_Q_CUSTOM_PAIRS)
+#define USB_Q_RX_EPS        (USB_Q_BULK_PAIRS)
+#define USB_Q_TX_EPS        (USB_Q_BULK_PAIRS + (u32)(EN_USB_CDC) + (u32)(EN_USB_NCM))
+
 /* ── Enumerations ─────────────────────────────────────────────────────────── */
 
 typedef enum {

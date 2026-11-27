@@ -66,5 +66,14 @@ typedef struct {
 
 extern const ca_usb_class_ops_t ca_usb_msc_ops;
 
+/* Medium present or not (one MSC function per device). Absent, the host gets
+ * NOT READY / medium not present and keeps the drive empty; made present
+ * again, the host is told the medium changed and reads it afresh. The host
+ * ejecting the drive makes it absent: the application may then take the
+ * memory back (count the ejects to see it happen). Present by default. */
+void ca_usb_msc_set_ready(bool ready);
+bool ca_usb_msc_ready(void);
+u32  ca_usb_msc_ejects(void);
+
 #endif /* EN_USB && EN_USB_MSC */
 #endif /* USB_MSC_H */

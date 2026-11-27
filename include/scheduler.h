@@ -744,7 +744,7 @@ u32 ca_scheduler_get_runtime_total(void);
  * @brief set a watchdog per thread
  * @note 32 bit compares with runtime total
  */
-void ca_os_thread_set_watchdog(u32 clocks_cycles);
+void ca_os_thread_set_watchdog(u32 clock_cycles);
 /**
  * @brief resets the total runtime counter
  * @note  if watchdog !=0 and watchdog<runttime_total

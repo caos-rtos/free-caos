@@ -10,6 +10,20 @@ with `<!-- paid -->`: they are removed from the FREE package.
 ## Unreleased
 
 ### Changed
+- 2026-11-27  USB (H563): the endpoint queues of the USB_DRD driver are sized
+  by the classes that are built and bound at ca_usb_ep_open, as on the other
+  families since 26/11: an NCM or CDC example gets ~54 KB of heap back (ex157
+  244 -> 298 KB). An endpoint beyond the budget is refused by ca_usb_ep_open.
+- 2026-11-26  USB: the endpoint queues are sized by the classes that are built
+  (CDC, MSC, NCM, CUSTOM), not for every endpoint the controller has, and a
+  queue is given to an endpoint when it is opened. RAM per USB example drops
+  a lot (CDC alone: H753/H773 104 -> 26 KB, F767 43.5 -> 13 KB, F446 26 -> 13
+  KB). With FS and HS both on, queue depth no longer halves: each core has its
+  own pool. An application that opens bulk endpoints itself (ca_usb_ep_open)
+  or uses the CUSTOM class sets USB_CUSTOM_EPS to the number of IN+OUT pairs;
+  an endpoint beyond the budget is refused by ca_usb_ep_open.
+- 2026-11-26  examples: ex142 (LVGL over VNC on USB-NCM) runs on the F767 at
+  320x200; it was disabled for lack of RAM, which the USB queues now give back.
 - 2026-11-26  FREE edition: same drivers as the full edition. Tamper, FMAC,
   HTTPS/TLS 1.3, ECDSA P-256, VNC over TLS, ChaCha20-Poly1305 and BLAKE2s
   are now in the FREE libraries; the only limits left are the fixed
@@ -48,6 +62,13 @@ with `<!-- paid -->`: they are removed from the FREE package.
   hole in the arena when it ends.
 
 ### Fixed
+- 2026-11-27  drivers: ca_st7735_init() can be called again on the same SPI
+  (a retry, a new MicroPython VM); it failed because the SPI DMA was already
+  bound. The binding keeps the first call's clock and CS; another SPI is refused.
+- 2026-11-26  FREE edition: `memlist` froze the board (console included).
+  Printing a block name checked the pointer against the FREE heap cap, which
+  took the heap lock `memlist` already held with interrupts off. The heap
+  start/end getters no longer take the lock (the values are fixed at init).
 - 2026-11-26  net: with IP fragmentation on, a task sending while the
   fragmentation queue is full now waits for a slot in order (up to 20 ms)
   instead of being refused at once. Several tasks bursting large datagrams
@@ -95,6 +116,27 @@ with `<!-- paid -->`: they are removed from the FREE package.
   were refused (`busy: no stack`) for lack of arena; now they run.
 
 ### Added
+- 2026-11-27  FAT: a second FatFS volume, "1:", on a RAM buffer the application
+  gives (ca_fat_ram_disk), with mkfs/mount/umount/statvfs; the handle calls of
+  fat_service pick the volume from the path. ca_fat_ram_read/_write fit the
+  USB MSC callbacks, so the same memory can be a USB stick.
+- 2026-11-27  USB MSC: the medium can be made absent and present again
+  (ca_usb_msc_set_ready); the host is told the medium changed and rereads it;
+  an eject from the host (START STOP UNIT) is seen (ca_usb_msc_ready/_ejects).
+- 2026-11-27  LVGL: ca_lvgl_call() wakes the GUI task at once (it waited up
+  to 10 ms for its next loop); new ca_lvgl_call_sync() runs a function in the
+  GUI task and waits for it.
+- 2026-11-26  drivers: st7735.h, ST7735 TFT controller (1.8" 128x160 RGB565
+  modules) over SPI with DMA: init, fill, blit from RGB565 memory, raw
+  window writes, PWM or GPIO backlight; module variant (offsets, RGB/BGR,
+  inversion, rotation) in the config and at run time. Example 152 (U575):
+  test pattern to recognise the variant, `lcd` CLI, 28 fps full frame at 10 MHz.
+- 2026-11-26  drivers: ca_st7735_show_fb() shows a caOS framebuffer on the
+  ST7735, sending only the changed 16x16 tiles; ca_st7735_blit() takes a
+  source stride. Example 153: LVGL on the 1.8" TFT (U575, landscape 160x128).
+- 2026-11-26  examples: 152 and 153 run on every bench Nucleo (153 not on the
+  F446: RAM); `lcd wire` / `e153 wire` print the TFT wiring of the board they
+  run on, from the same table the driver is configured with (lcd_pins.h).
 - 2026-11-26  crypto: ChaCha20, HChaCha20, Poly1305, ChaCha20-Poly1305
   (96-bit nonce of RFC 8439 and the 64-bit nonce of WireGuard) and
   XChaCha20-Poly1305 (`EN_CHACHA20_POLY1305`); BLAKE2s (RFC 7693) and

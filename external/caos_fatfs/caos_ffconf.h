@@ -30,7 +30,7 @@
 #define FF_FS_RPATH         2   /* f_chdir + f_getcwd */
 #define FF_PATH_DEPTH       10
 
-#define FF_VOLUMES          1   /* 1 volume = SD card */
+#define FF_VOLUMES          2   /* 0: = SD card, 1: = RAM disk (ca_fat_ram_attach) */
 #define FF_STR_VOLUME_ID    0
 #define FF_VOLUME_STRS      "SD"
 #define FF_MULTI_PARTITION  1   /* f_fdisk; richiede VolToPart[] in fatfs_diskio.c */

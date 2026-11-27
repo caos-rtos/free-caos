@@ -124,6 +124,24 @@ i32 ca_fat_prename(const char *from, const char *to);
 /* cluster size in bytes, clusters in all, clusters free */
 i32 ca_fat_statvfs(u32 *cluster_bytes, u32 *total, u32 *free_clst);
 
+/* ---- RAM disk: FatFS volume "1:" ------------------------------------------
+ * A buffer of 512-byte blocks the application owns (static RAM or a shared
+ * heap block) becomes a second volume, next to the SD card ("0:"). Paths
+ * starting with "1:" reach it through every handle call above. The same
+ * memory can be shown to a USB host as a disk (usb_msc.h: read/write =
+ * ca_fat_ram_read/_write) - never to both at once: the board unmounts it
+ * before the host gets it (FatFS and the host each cache the FAT).
+ * ca_fat_ram_disk(NULL, 0) detaches it (unmount first). */
+void ca_fat_ram_disk(u8 *buf, u32 blocks);
+u32  ca_fat_ram_blocks(void);                               /* 0 = none attached */
+bool ca_fat_ram_read(u32 lba, u8 *buf, u32 count);         /* MSC callback signature */
+bool ca_fat_ram_write(u32 lba, const u8 *buf, u32 count);
+bool ca_fat_ram_mkfs(void);                                 /* FAT, no MBR; unmounts first */
+bool ca_fat_ram_mount(void);
+bool ca_fat_ram_umount(void);                               /* files of "1:" must be closed */
+bool ca_fat_ram_mounted(void);
+i32  ca_fat_ram_statvfs(u32 *cluster_bytes, u32 *total, u32 *free_clst);
+
 /* ---- Encrypted files (EN_FAT_CRYPT) ---------------------------------------
  * The file goes through the AES channel (aes_channel_service) synchronously:
  * on write the plaintext is fed to the channel in chunks of FAT_CRYPT_CHUNK

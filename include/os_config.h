@@ -59,6 +59,7 @@
 #define EN_USB_FS                    1
 #define EN_USB_HS                    0
 #define EN_USB_CUSTOM                1
+#define USB_CUSTOM_EPS               0U
 #define EN_USB_DBG                   0
 #define USB_PID_BASE_CUSTOM          0x0000U
 #define USB_VID                      0xCA01U

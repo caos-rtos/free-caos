@@ -82,8 +82,15 @@ bool ca_lvgl_stop(void);
 void ca_lvgl_input_pointer(u8 buttons, u16 x, u16 y);
 bool ca_lvgl_input_key(bool down, u32 keysym);
 
-/* fn(arg) in the GUI task at its next loop. false = queue full */
+/* fn(arg) in the GUI task, which the call wakes. false = queue full */
 bool ca_lvgl_call(ca_lvgl_fn_t fn, void *arg);
+
+/* fn(arg) in the GUI task, the caller waiting for it to have run (from the
+ * GUI task itself: run at once). One caller at a time, the others wait their
+ * turn. false: LVGL not running, queue full, or not run within timeout_ms -
+ * then fn may still run later: arg must stay valid, and a GUI task that
+ * stops answering should not be called again. */
+bool ca_lvgl_call_sync(ca_lvgl_fn_t fn, void *arg, u32 timeout_ms);
 
 #endif /* EN_FB */
 

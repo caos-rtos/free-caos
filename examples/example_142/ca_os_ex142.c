@@ -56,7 +56,7 @@
 #endif
 
 #if EN_USB && EN_USB_NCM && EN_NET && EN_ARP_SERVICE && EN_DHCP_SERVICE && EN_NET_DHCP && \
-    EN_TCP_SERVICE && EN_FB && EN_VNC_SERVICE && MCU_ID != 439 && MCU_ID != 767 && \
+    EN_TCP_SERVICE && EN_FB && EN_VNC_SERVICE && MCU_ID != 439 && \
     !E142_FREE_NO_ROOM
 
 #include "lvgl.h"
@@ -67,9 +67,11 @@
 #elif MCU_ID == 753 || MCU_ID == 747
 #define SCR_W   480             /* 255 KB */
 #define SCR_H   272
-#elif MCU_ID == 773
-#define SCR_W   320             /* 125 KB: at 320x240 the 232 KB heap had no room
-                                   left for the TLS context (~25 KB) */
+#elif MCU_ID == 773 || MCU_ID == 767
+#define SCR_W   320             /* 125 KB. H773: at 320x240 the 232 KB heap had no
+                                   room left for the TLS context (~25 KB). F767: fits
+                                   since the USB queues follow the classes (26/11,
+                                   NCM 13 KB instead of 43.5 KB) */
 #define SCR_H   200
 #else
 #define SCR_W   320             /* 150 KB: F746, H563 (plain RFB, no TLS context) */
@@ -420,11 +422,6 @@ PRIVATE_STRING(m142b, "DISABLED in the FREE edition on this board - framebuffer 
 /* 97 KB of heap: framebuffer + LVGL pool + draw buffer + TLS context need
  * ~150 KB (17/11/2026). The F439 keeps LVGL for small screens: ex140. */
 PRIVATE_STRING(m142b, "DISABLED on F439 - not enough RAM for framebuffer + LVGL + TLS (heap 97 KB, needs ~150 KB)");
-#elif MCU_ID == 767
-/* 159 KB of heap with USB-NCM (ex141 over ETH has 207 KB): the 320x200
- * framebuffer lvgl_check.py needs (128 KB) + LVGL + VNC ~62 KB do not fit
- * (19/11/2026). LVGL over VNC on the F767: ex141. */
-PRIVATE_STRING(m142b, "DISABLED on F767 - not enough RAM for framebuffer + LVGL + VNC (heap 159 KB, needs ~190 KB); over Ethernet: ex141");
 #else
 PRIVATE_STRING(m142b, "DISABLED - needs USB NCM (EN_USB, EN_USB_NCM, EN_NET, DHCP, TCP), EN_FB and EN_VNC_SERVICE");
 #endif
